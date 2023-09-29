@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial.distance import pdist, squareform
 from sklearn.cluster import KMeans
 
-from datasets.breakfast import VideoDataset
+from datasets.video_dataset import VideoDataset
 import seg_ot
 from metrics import ClusteringMetrics, indep_eval_metrics
 
@@ -81,7 +81,7 @@ class VideoSSL(pl.LightningModule):
         self.save_hyperparameters()
 
     def training_step(self, batch, batch_idx):
-        features_raw, mask, gt, action, person, cam_name, n_subactions = batch
+        features_raw, mask, gt, fname, n_subactions = batch
         with torch.no_grad():
             self.clusters.data = F.normalize(self.clusters.data, dim=-1)
         D = self.layer_sizes[-1]
@@ -105,7 +105,7 @@ class VideoSSL(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):  # subsample videos
-        features_raw, mask, gt, action, person, cam_name, n_subactions = batch
+        features_raw, mask, gt, fname, n_subactions = batch
         D = self.layer_sizes[-1]
         B, T, _ = features_raw.shape
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
@@ -158,7 +158,7 @@ class VideoSSL(pl.LightningModule):
             for ch in gt_change:
                 ax.axvline(ch, color='red')
             plt.colorbar(plot1, ax=ax)
-            ax.set_title(f'{person[0]}_{cam_name[0]}_{action[0]}')
+            ax.set_title(fname[0])
             ax.set_xlabel('Frame idx')
             ax.set_ylabel('Frame idx')
             wandb.log({f"val_pairwise_{img_idx}": fig, "trainer/global_step": self.trainer.global_step})
@@ -172,7 +172,7 @@ class VideoSSL(pl.LightningModule):
                 ax.axvline(ch, color='red')
             ax.set_aspect('auto')
             plt.colorbar(plot1, ax=ax)
-            ax.set_title(f'{person[0]}_{cam_name[0]}_{action[0]}')
+            ax.set_title(fname[0])
             ax.set_xlabel('Frame idx')
             ax.set_ylabel('Cluster idx')
             wandb.log({f"val_P_{img_idx}": fig, "trainer/global_step": self.trainer.global_step}) 
@@ -186,7 +186,7 @@ class VideoSSL(pl.LightningModule):
                 ax.axvline(ch, color='red')
             ax.set_aspect('auto')
             plt.colorbar(plot1, ax=ax)
-            ax.set_title(f'{person[0]}_{cam_name[0]}_{action[0]}')
+            ax.set_title(fname[0])
             ax.set_xlabel('Frame idx')
             ax.set_ylabel('Cluster idx')
             wandb.log({f"val_OT_PL_{img_idx}": fig, "trainer/global_step": self.trainer.global_step}) 
@@ -200,7 +200,7 @@ class VideoSSL(pl.LightningModule):
                 ax.axvline(ch, color='red')
             ax.set_aspect('auto')
             plt.colorbar(plot1, ax=ax)
-            ax.set_title(f'{person[0]}_{cam_name[0]}_{action[0]}')
+            ax.set_title(fname[0])
             ax.set_xlabel('Frame idx')
             ax.set_ylabel('Cluster idx')
             wandb.log({f"val_OT_pred_{img_idx}": fig, "trainer/global_step": self.trainer.global_step}) 
@@ -208,7 +208,7 @@ class VideoSSL(pl.LightningModule):
         return None
     
     def test_step(self, batch, batch_idx):  # subsample videos
-        features_raw, mask, gt, action, person, cam_name, n_subactions = batch
+        features_raw, mask, gt, fname, n_subactions = batch
         D = self.layer_sizes[-1]
         B, T, _ = features_raw.shape
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
@@ -294,7 +294,7 @@ class VideoSSL(pl.LightningModule):
         with torch.no_grad():
             features_full = []
             self.mlp.eval()
-            for features_raw, _, _, _, _, _, _ in dataloader:
+            for features_raw, _, _, _, _ in dataloader:
                 B, T, _ = features_raw.shape
                 D = self.layer_sizes[-1]
                 features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
@@ -335,7 +335,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-ot-eval', '-no', type=int, nargs='+', default=[25, 15], help='number of outer and inner Sinkhorn iterations for OT (train)')
     
     parser.add_argument('--n-frames', '-f', type=int, default=256, help='number of frames sampled per video for train/val')
-    parser.add_argument('--std-feats', '-s', type=bool, default=True, help='standardize features per video during preprocessing')
+    parser.add_argument('--std-feats', '-s', action='store_true', help='standardize features per video during preprocessing')
     
     parser.add_argument('--n-epochs', '-ne', type=int, default=15, help='number of epochs for training')
     parser.add_argument('--batch-size', '-bs', type=int, default=2, help='batch size')
@@ -344,6 +344,7 @@ if __name__ == '__main__':
     parser.add_argument('--entropy-train', '-ht', type=float, default=0.25, help='entropy regularization weight for training loss')
     parser.add_argument('--batch-norm', '-bn', action='store_false', help='do not use batch normalization: default = True')
     parser.add_argument('--k-means', '-km', action='store_false', help='do not initialize clusters with kmeans default = True')
+    parser.add_argument('--layers', '-ls', default=[64, 128, 40], nargs='+', type=int, help='layer sizes for MLP (in, hidden, ..., out)')
 
     parser.add_argument('--ema', '-em', type=float, default=0.99, help='EMA weight (0 is no moving average, only most recent)')
     parser.add_argument('--rho', type=float, default=0.1, help='Factor for global structure weighting term')
@@ -354,7 +355,8 @@ if __name__ == '__main__':
     parser.add_argument('--clusters-learn', '-lc', action='store_true', help='allow clusters to be learnable parameters')
 
     parser.add_argument('--base-path', '-p', type=str, default='/home/users/u6567085/data', help='base directory for dataset')
-    parser.add_argument('--activity', '-d', type=str, nargs='+', required=True, help='activity classes to select for dataset')
+    parser.add_argument('--dataset', '-d', type=str, required=True, help='dataset to use for training/eval (Breakfast, YTI, FSeval, FS, desktop_assembly)')
+    parser.add_argument('--activity', '-ac', type=str, nargs='+', required=True, help='activity classes to select for dataset')
     parser.add_argument('--val-freq', '-vf', type=int, default=5, help='validation epoch frequency (epochs)')
     parser.add_argument('--gpu', '-g', type=int, default=1, help='gpu id to use')
     parser.add_argument('--wandb', '-w', action='store_true', help='use wandb for logging')
@@ -369,19 +371,19 @@ if __name__ == '__main__':
     if args.ckpt is not None:
         ssl = VideoSSL.load_from_checkpoint(args.ckpt)
     else:
-        ssl = VideoSSL(n_clusters=args.n_clusters, alpha=args.alpha, ub_weight=args.ub_weight, train_eps=args.eps_train, eval_eps=args.eps_eval,
+        ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha=args.alpha, ub_weight=args.ub_weight, train_eps=args.eps_train, eval_eps=args.eps_eval,
                     gw_radius=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval, inter_vid_cost=args.inter_vid_cost,
                     learn_clusters=args.clusters_learn, n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, ema=args.ema,
                     prior_ep=args.prior_epoch, prior_fac=args.prior_factor, rho=args.rho, entropy_train=args.entropy_train, bn=args.batch_norm)
 
     activity_name = '_'.join(args.activity)
-    name = f'breakfast_{activity_name}_{args.group}_seed_{args.seed}'
+    name = f'{args.dataset}_{activity_name}_{args.group}_seed_{args.seed}'
     logger = pl.loggers.WandbLogger(name=name, project='video_ssl', group='main_results', save_dir='wandb') if args.wandb else None
     trainer = pl.Trainer(devices=[args.gpu], check_val_every_n_epoch=args.val_freq, max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger)
     
-    data_val = VideoDataset('/home/users/u6567085/data', args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
-    data_train = VideoDataset('/home/users/u6567085/data', args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
-    data_test = VideoDataset('/home/users/u6567085/data', None, standardise=args.std_feats, random=False, action_class=args.activity)
+    data_val = VideoDataset('/home/users/u6567085/data', args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
+    data_train = VideoDataset('/home/users/u6567085/data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
+    data_test = VideoDataset('/home/users/u6567085/data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
     val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
     train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
     test_loader = DataLoader(data_test, batch_size=1, shuffle=False)
