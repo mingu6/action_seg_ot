@@ -22,9 +22,16 @@ class ClusteringMetrics(Metric):
         self.gt_labels.extend(gt_labels.flatten()[mask.flatten()].tolist())
         self.n_videos += pred_labels.shape[0]
 
-    def compute(self):
-        metric = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos)
+    def compute(self, exclude_cls=None):
+        metric = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos, exclude_cls)
         return metric
+
+
+def filter_exclusions(pred_labels, gt_labels, excl_cls):
+    if excl_cls is None:
+        return pred_labels, gt_labels
+    mask = gt_labels != excl_cls
+    return pred_labels[mask], gt_labels[mask]
 
 
 def pred_to_gt_match(pred_labels, gt_labels):
@@ -44,31 +51,34 @@ def pred_to_gt_match(pred_labels, gt_labels):
     return pred_opt, gt_opt
 
 
-def eval_mof(pred_labels, gt_labels, n_videos):
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels, gt_labels)
+def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None):
+    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
+    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
 
     true_pos_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
-        true_pos_count += np.logical_and(pred_labels == pred_lab, gt_labels == gt_lab).sum()
-    return true_pos_count / len(pred_labels), true_pos_count, len(pred_labels)
+        true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
+    return true_pos_count / len(gt_labels_) , true_pos_count, len(gt_labels_)
 
 
-def eval_iou(pred_labels, gt_labels, n_videos):
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels, gt_labels)
+def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None):
+    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
+    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
 
     true_pos_count = 0
     union_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
-        true_pos_count += np.logical_and(pred_labels == pred_lab, gt_labels == gt_lab).sum()
-        union_count += np.logical_or(pred_labels == pred_lab, gt_labels == gt_lab).sum()
+        true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
+        union_count += np.logical_or(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
     return true_pos_count / union_count, true_pos_count, union_count
 
 
-def eval_f1(pred_labels, gt_labels, n_videos, n_sample=15, n_exper=50, eps=1e-8, weird=False):
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels, gt_labels)
-    n_actions = len(np.unique(gt_labels))
+def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, n_sample=15, n_exper=50, eps=1e-8, weird=False):
+    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
+    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    n_actions = len(np.unique(gt_labels_))
 
-    gt_segment_boundaries = np.where(gt_labels[1:] - gt_labels[:-1])[0] + 1
+    gt_segment_boundaries = np.where(gt_labels_[1:] - gt_labels_[:-1])[0] + 1
     gt_segment_boundaries = np.concatenate(([0], gt_segment_boundaries))
 
     tp_agg = 0.
@@ -79,10 +89,10 @@ def eval_f1(pred_labels, gt_labels, n_videos, n_sample=15, n_exper=50, eps=1e-8,
             # if up - lo == 1:
             #     continue
             sample_idx = np.random.random_integers(lo, up, n_sample)
-            gt_lab = gt_labels[lo]
+            gt_lab = gt_labels_[lo]
             if gt_lab in gt_opt:
                 pred_lab = pred_opt[gt_opt == gt_lab]
-                tp = (pred_labels[sample_idx] == pred_lab).sum()
+                tp = (pred_labels_[sample_idx] == pred_lab).sum()
             else:
                 tp = 0.  # never predicted this gt label, so no true positives
             if weird:
@@ -97,19 +107,21 @@ def eval_f1(pred_labels, gt_labels, n_videos, n_sample=15, n_exper=50, eps=1e-8,
     return f1, precision, recall, n_videos, segments_count
 
 
-def eval_nmi(pred_labels, gt_labels, n_videos):
-    score = nmi_score(gt_labels, pred_labels)
+def eval_nmi(pred_labels, gt_labels, n_videos, exclude_cls=None):
+    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
+    score = nmi_score(gt_labels_, pred_labels_)
     if type(score) is float:
         return score
     else:
         return score.item()
 
 
-def eval_ari(pred_labels, gt_labels, n_videos):
-    return adjusted_rand_score(gt_labels, pred_labels)
+def eval_ari(pred_labels, gt_labels, n_videos, exclude_cls=None):
+    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
+    return adjusted_rand_score(gt_labels_, pred_labels_)
 
 
-def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric):
+def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude_cls=None):
     """
     Evaluates each video sequence in a batch independently and aggregates results.
     """
@@ -117,7 +129,7 @@ def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric):
     eval_fn = score_fn_lookup[metric]
     val = 0.
     for b in range(B):
-        score = eval_fn(gt_labels_batch[b][mask[b]].cpu().numpy(), pred_labels_batch[b][mask[b]].cpu().numpy(), B)
+        score = eval_fn(pred_labels_batch[b][mask[b]].cpu().numpy(), gt_labels_batch[b][mask[b]].cpu().numpy(), 1, exclude_cls)
         if type(score) is float:
             val += score
         else:
@@ -125,4 +137,4 @@ def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric):
     return val / B
 
 
-score_fn_lookup = {'nmi': eval_nmi, 'ari': eval_ari, 'mof': eval_mof, 'f1': eval_f1, 'f1_w': lambda pl, gl, n: eval_f1(pl, gl, n, weird=True), 'iou': eval_iou}
+score_fn_lookup = {'nmi': eval_nmi, 'ari': eval_ari, 'mof': eval_mof, 'f1': eval_f1, 'f1_w': lambda pl, gl, n, x: eval_f1(pl, gl, n, weird=True, exclude_cls=x), 'iou': eval_iou}

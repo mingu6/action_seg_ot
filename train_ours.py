@@ -35,7 +35,7 @@ def contrastive(features, pos_radius, mask):
 class VideoSSL(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha=0.2, n_ot_train=[5, 3], n_ot_eval=[25, 10],
                  train_eps=0.1, eval_eps=0.02, inter_vid_cost=0.3, ub_proj_type='kl', ub_weight=0.1, temp=0.1, ema=0., gw_radius=5, learn_clusters=False,
-                 n_frames=256, rho=0.1, prior_ep=10, prior_fac=0.25, entropy_train=0.25, bn=True):
+                 n_frames=256, rho=0.1, prior_ep=10, prior_fac=0.25, entropy_train=0.25, bn=True, exclude_cls=None):
         super().__init__()
         self.lr = lr
         self.n_clusters = n_clusters
@@ -58,6 +58,7 @@ class VideoSSL(pl.LightningModule):
         self.prior_fac = prior_fac
         self.entropy_train = entropy_train
         self.bn = bn
+        self.exclude_cls = exclude_cls
         # initialize MLP
         if bn:
             layers = [nn.Sequential(nn.Linear(sz, sz1), nn.ReLU(), nn.BatchNorm1d(sz1)) for sz, sz1 in zip(layer_sizes[:-2], layer_sizes[1:-1])]
@@ -122,12 +123,12 @@ class VideoSSL(pl.LightningModule):
         self.iou.update(segments, gt, mask)
 
         # log clustering metrics per video
-        nmi_per = indep_eval_metrics(segments, gt, mask, 'nmi')
-        ari_per = indep_eval_metrics(segments, gt, mask, 'ari')
-        mof_per = indep_eval_metrics(segments, gt, mask, 'mof')
-        f1_per = indep_eval_metrics(segments, gt, mask, 'f1')
-        f1_w_per = indep_eval_metrics(segments, gt, mask, 'f1_w')
-        iou_per = indep_eval_metrics(segments, gt, mask, 'iou')
+        nmi_per = indep_eval_metrics(segments, gt, mask, 'nmi', exclude_cls=self.exclude_cls)
+        ari_per = indep_eval_metrics(segments, gt, mask, 'ari', exclude_cls=self.exclude_cls)
+        mof_per = indep_eval_metrics(segments, gt, mask, 'mof', exclude_cls=self.exclude_cls)
+        f1_per = indep_eval_metrics(segments, gt, mask, 'f1', exclude_cls=self.exclude_cls)
+        f1_w_per = indep_eval_metrics(segments, gt, mask, 'f1_w', exclude_cls=self.exclude_cls)
+        iou_per = indep_eval_metrics(segments, gt, mask, 'iou', exclude_cls=self.exclude_cls)
         self.log('val_nmi_per', nmi_per)
         self.log('val_ari_per', ari_per)
         self.log('val_mof_per', mof_per)
@@ -217,6 +218,8 @@ class VideoSSL(pl.LightningModule):
         r_test = self.gw_radius / self.n_frames * T
         indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
                                            proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, rho=self.rho)
+        # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=0.1, radius=r_test,
+        #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, rho=self.rho)
         segments = indep_codes.argmax(dim=2)
         self.nmi.update(segments, gt, mask)
         self.ari.update(segments, gt, mask)
@@ -226,12 +229,12 @@ class VideoSSL(pl.LightningModule):
         self.iou.update(segments, gt, mask)
 
         # log clustering metrics per video
-        nmi_per = indep_eval_metrics(segments, gt, mask, 'nmi')
-        ari_per = indep_eval_metrics(segments, gt, mask, 'ari')
-        mof_per = indep_eval_metrics(segments, gt, mask, 'mof')
-        f1_per = indep_eval_metrics(segments, gt, mask, 'f1')
-        f1_w_per = indep_eval_metrics(segments, gt, mask, 'f1_w')
-        iou_per = indep_eval_metrics(segments, gt, mask, 'iou')
+        nmi_per = indep_eval_metrics(segments, gt, mask, 'nmi', exclude_cls=self.exclude_cls)
+        ari_per = indep_eval_metrics(segments, gt, mask, 'ari', exclude_cls=self.exclude_cls)
+        mof_per = indep_eval_metrics(segments, gt, mask, 'mof', exclude_cls=self.exclude_cls)
+        f1_per = indep_eval_metrics(segments, gt, mask, 'f1', exclude_cls=self.exclude_cls)
+        f1_w_per = indep_eval_metrics(segments, gt, mask, 'f1_w', exclude_cls=self.exclude_cls)
+        iou_per = indep_eval_metrics(segments, gt, mask, 'iou', exclude_cls=self.exclude_cls)
         self.log('test_nmi_per', nmi_per)
         self.log('test_ari_per', ari_per)
         self.log('test_mof_per', mof_per)
@@ -243,10 +246,10 @@ class VideoSSL(pl.LightningModule):
     def on_validation_epoch_end(self):
         self.log('val_nmi_full', self.nmi.compute())
         self.log('val_ari_full', self.ari.compute())
-        mean_mof, tp_count, n_frames = self.mof.compute()
-        mean_f1, precision, recall, n_videos, segments_count = self.f1.compute()
-        mean_f1_w, precision_w, recall_w, n_videos_w, segments_count_w = self.f1_w.compute()
-        mean_iou, tp_count1, union_count = self.iou.compute()
+        mean_mof, tp_count, n_frames = self.mof.compute(exclude_cls=self.exclude_cls)
+        mean_f1, precision, recall, n_videos, segments_count = self.f1.compute(exclude_cls=self.exclude_cls)
+        mean_f1_w, precision_w, recall_w, n_videos_w, segments_count_w = self.f1_w.compute(exclude_cls=self.exclude_cls)
+        mean_iou, tp_count1, union_count = self.iou.compute(exclude_cls=self.exclude_cls)
         self.log('val_mof_full', mean_mof)
         self.log('val_f1_full', mean_f1)
         self.log('val_f1_weird_full', mean_f1_w)
@@ -259,12 +262,12 @@ class VideoSSL(pl.LightningModule):
         self.iou.reset()
 
     def on_test_epoch_end(self):
-        self.log('test_nmi_full', self.nmi.compute())
-        self.log('test_ari_full', self.ari.compute())
-        mean_mof, tp_count, n_frames = self.mof.compute()
-        mean_f1, precision, recall, n_videos, segments_count = self.f1.compute()
-        mean_f1_w, precision_w, recall_w, n_videos_w, segments_count_w = self.f1_w.compute()
-        mean_iou, tp_count1, union_count = self.iou.compute()
+        self.log('test_nmi_full', self.nmi.compute(exclude_cls=self.exclude_cls))
+        self.log('test_ari_full', self.ari.compute(exclude_cls=self.exclude_cls))
+        mean_mof, tp_count, n_frames = self.mof.compute(exclude_cls=self.exclude_cls)
+        mean_f1, precision, recall, n_videos, segments_count = self.f1.compute(exclude_cls=self.exclude_cls)
+        mean_f1_w, precision_w, recall_w, n_videos_w, segments_count_w = self.f1_w.compute(exclude_cls=self.exclude_cls)
+        mean_iou, tp_count1, union_count = self.iou.compute(exclude_cls=self.exclude_cls)
         self.log('test_mof_full', mean_mof)
         self.log('test_tp_full', tp_count)
         self.log('test_n_frames', n_frames)
@@ -357,6 +360,7 @@ if __name__ == '__main__':
     parser.add_argument('--base-path', '-p', type=str, default='/home/users/u6567085/data', help='base directory for dataset')
     parser.add_argument('--dataset', '-d', type=str, required=True, help='dataset to use for training/eval (Breakfast, YTI, FSeval, FS, desktop_assembly)')
     parser.add_argument('--activity', '-ac', type=str, nargs='+', required=True, help='activity classes to select for dataset')
+    parser.add_argument('--exclude', '-x', type=int, default=None, help='classes to exclude from evaluation')
     parser.add_argument('--val-freq', '-vf', type=int, default=5, help='validation epoch frequency (epochs)')
     parser.add_argument('--gpu', '-g', type=int, default=1, help='gpu id to use')
     parser.add_argument('--wandb', '-w', action='store_true', help='use wandb for logging')
@@ -367,6 +371,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     pl.seed_everything(args.seed)
+        
+    data_val = VideoDataset('/home/users/u6567085/data', args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
+    data_train = VideoDataset('/home/users/u6567085/data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
+    data_test = VideoDataset('/home/users/u6567085/data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
+    val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
+    test_loader = DataLoader(data_test, batch_size=1, shuffle=False)
 
     if args.ckpt is not None:
         ssl = VideoSSL.load_from_checkpoint(args.ckpt)
@@ -374,19 +385,12 @@ if __name__ == '__main__':
         ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha=args.alpha, ub_weight=args.ub_weight, train_eps=args.eps_train, eval_eps=args.eps_eval,
                     gw_radius=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval, inter_vid_cost=args.inter_vid_cost,
                     learn_clusters=args.clusters_learn, n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, ema=args.ema,
-                    prior_ep=args.prior_epoch, prior_fac=args.prior_factor, rho=args.rho, entropy_train=args.entropy_train, bn=args.batch_norm)
+                    prior_ep=args.prior_epoch, prior_fac=args.prior_factor, rho=args.rho, entropy_train=args.entropy_train, bn=args.batch_norm, exclude_cls=args.exclude)
 
     activity_name = '_'.join(args.activity)
     name = f'{args.dataset}_{activity_name}_{args.group}_seed_{args.seed}'
     logger = pl.loggers.WandbLogger(name=name, project='video_ssl', group='main_results', save_dir='wandb') if args.wandb else None
     trainer = pl.Trainer(devices=[args.gpu], check_val_every_n_epoch=args.val_freq, max_epochs=args.n_epochs, log_every_n_steps=50, logger=logger)
-    
-    data_val = VideoDataset('/home/users/u6567085/data', args.dataset, args.n_frames, standardise=args.std_feats, random=False, action_class=args.activity)
-    data_train = VideoDataset('/home/users/u6567085/data', args.dataset, args.n_frames, standardise=args.std_feats, random=True, action_class=args.activity)
-    data_test = VideoDataset('/home/users/u6567085/data', args.dataset, None, standardise=args.std_feats, random=False, action_class=args.activity)
-    val_loader = DataLoader(data_val, batch_size=args.batch_size, shuffle=False)
-    train_loader = DataLoader(data_train, batch_size=args.batch_size, shuffle=True)
-    test_loader = DataLoader(data_test, batch_size=1, shuffle=False)
 
     if args.k_means and args.ckpt is None:
         ssl.fit_clusters(train_loader, args.n_clusters)

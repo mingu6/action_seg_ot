@@ -14,7 +14,7 @@ def parse_action_name(fname, dataset):
     if dataset == 'Breakfast':
         return fname.split('_')[-1]
     if dataset == 'YTI':  # ignores _idt files in groundTruth automatically
-        return fname.split('_')[:-1].join('_')
+        return '_'.join(fname.split('_')[:-1])
     if dataset == 'FS':  # only one activity class
         return ''
     if dataset == 'desktop_assembly':  # only one activity class
@@ -33,7 +33,7 @@ class VideoDataset(Dataset):
             granularity = None
         self.data_dir = path.join(root_dir, self.dataset)
         self.video_fnames = sorted([fname for fname in os.listdir(path.join(self.data_dir, 'groundTruth'))
-                                    if len(fname.split('_')) > 0 or len(fname.split('-')) > 0])
+                                    if len(fname.split('_')) > 1 or len(fname.split('-')) > 1])
         if self.dataset in ['FS', 'desktop_assembly']:
             action_class = ''
         if action_class != ['all']:
@@ -65,7 +65,7 @@ class VideoDataset(Dataset):
         video_fname = self.video_fnames[idx]
         gt = [line.rstrip() for line in open(path.join(self.data_dir, 'groundTruth', video_fname))]
         inds, mask = self._partition_and_sample(self.n_frames, len(gt))
-        gt = torch.Tensor([self.action_mapping[gt[ind]] for ind in inds])
+        gt = torch.Tensor([self.action_mapping[gt[ind]] for ind in inds]).int()
         action = parse_action_name(video_fname, self.dataset)
         feat_fname = path.join(self.data_dir, 'features', action, video_fname)
         try:
