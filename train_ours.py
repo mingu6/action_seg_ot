@@ -15,7 +15,7 @@ from sklearn.cluster import KMeans
 
 from datasets.video_dataset import VideoDataset
 import seg_ot
-from metrics import ClusteringMetrics, indep_eval_metrics
+from metrics import ClusteringMetrics, indep_eval_metrics, pred_to_gt_match, filter_exclusions
 
 num_eps = 1e-11
 
@@ -76,10 +76,12 @@ class VideoSSL(pl.LightningModule):
         self.f1 = ClusteringMetrics(metric='f1')
         self.f1_w = ClusteringMetrics(metric='f1_w')
         self.iou = ClusteringMetrics(metric='iou')
+        self.miou = ClusteringMetrics(metric='mean_iou')
         # EMA stuff
         self.mlp_ma = deepcopy(self.mlp)
         self.ema = EMA(ema)
         self.save_hyperparameters()
+        self.test_cache = []
 
     def training_step(self, batch, batch_idx):
         features_raw, mask, gt, fname, n_subactions = batch
@@ -92,8 +94,9 @@ class VideoSSL(pl.LightningModule):
         codes = codes / codes.sum(dim=-1, keepdim=True)
         with torch.no_grad():  # pseudo-labels from OT
             features_opt = F.normalize(self.mlp_ma(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
+            temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
             opt_codes = seg_ot.segment_indep(features_opt, self.clusters, mask, eps=self.train_eps, alpha=self.alpha, radius=self.gw_radius,
-                                             proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, rho=self.rho)
+                                             proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, temp_prior=temp_prior)
 
         loss_ce = -((opt_codes * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=2).mean()
         class_rep = (codes * mask[..., None]).mean(dim=[0,1])
@@ -112,8 +115,11 @@ class VideoSSL(pl.LightningModule):
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
 
         # log clustering metrics over full epoch
+        temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
         indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=self.gw_radius,
-                                           proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, rho=self.rho)
+                                           proj=self.ub_proj_type, proj_weight=0.01, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+        # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=self.gw_radius,
+        #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         segments = indep_codes.argmax(dim=2)
         self.nmi.update(segments, gt, mask)
         self.ari.update(segments, gt, mask)
@@ -121,6 +127,7 @@ class VideoSSL(pl.LightningModule):
         self.f1.update(segments, gt, mask)
         self.f1_w.update(segments, gt, mask)
         self.iou.update(segments, gt, mask)
+        self.miou.update(segments, gt, mask)
 
         # log clustering metrics per video
         nmi_per = indep_eval_metrics(segments, gt, mask, 'nmi', exclude_cls=self.exclude_cls)
@@ -129,20 +136,23 @@ class VideoSSL(pl.LightningModule):
         f1_per = indep_eval_metrics(segments, gt, mask, 'f1', exclude_cls=self.exclude_cls)
         f1_w_per = indep_eval_metrics(segments, gt, mask, 'f1_w', exclude_cls=self.exclude_cls)
         iou_per = indep_eval_metrics(segments, gt, mask, 'iou', exclude_cls=self.exclude_cls)
+        miou_per = indep_eval_metrics(segments, gt, mask, 'mean_iou', exclude_cls=self.exclude_cls)
         self.log('val_nmi_per', nmi_per)
         self.log('val_ari_per', ari_per)
         self.log('val_mof_per', mof_per)
         self.log('val_f1_per', f1_per)
         self.log('val_f1_weird_per', f1_w_per)
         self.log('val_iou_per', iou_per)
+        self.log('val_mean_iou_per', miou_per)
 
         # log validation loss
 
         codes = torch.exp(features @ self.clusters.T / self.temp)
         codes /= codes.sum(dim=-1, keepdim=True)
         features_ma = F.normalize(self.mlp_ma(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
+        temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
         pseudo_lab = seg_ot.segment_indep(features_ma, self.clusters, mask, eps=self.train_eps, alpha=self.alpha, radius=self.gw_radius,
-                                          proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, rho=self.rho)
+                                          proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, temp_prior=temp_prior)
         loss_ce = -((pseudo_lab * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=[1, 2]).mean()
         self.log('val_ce_loss', loss_ce)
 
@@ -216,10 +226,11 @@ class VideoSSL(pl.LightningModule):
 
         # log clustering metrics over full epoch
         r_test = self.gw_radius / self.n_frames * T
+        temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
+        # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
+        #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
-                                           proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, rho=self.rho)
-        # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=0.1, radius=r_test,
-        #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, rho=self.rho)
+                                    proj=self.ub_proj_type, proj_weight=0.01, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         segments = indep_codes.argmax(dim=2)
         self.nmi.update(segments, gt, mask)
         self.ari.update(segments, gt, mask)
@@ -227,6 +238,7 @@ class VideoSSL(pl.LightningModule):
         self.f1.update(segments, gt, mask)
         self.f1_w.update(segments, gt, mask)
         self.iou.update(segments, gt, mask)
+        self.miou.update(segments, gt, mask)
 
         # log clustering metrics per video
         nmi_per = indep_eval_metrics(segments, gt, mask, 'nmi', exclude_cls=self.exclude_cls)
@@ -235,39 +247,49 @@ class VideoSSL(pl.LightningModule):
         f1_per = indep_eval_metrics(segments, gt, mask, 'f1', exclude_cls=self.exclude_cls)
         f1_w_per = indep_eval_metrics(segments, gt, mask, 'f1_w', exclude_cls=self.exclude_cls)
         iou_per = indep_eval_metrics(segments, gt, mask, 'iou', exclude_cls=self.exclude_cls)
+        miou_per = indep_eval_metrics(segments, gt, mask, 'mean_iou', exclude_cls=self.exclude_cls)
         self.log('test_nmi_per', nmi_per)
         self.log('test_ari_per', ari_per)
         self.log('test_mof_per', mof_per)
         self.log('test_f1_per', f1_per)
         self.log('test_f1_weird_per', f1_w_per)
         self.log('test_iou_per', iou_per)
+        self.log('test_mean_iou_per', miou_per)
+
+        # cache videos for plotting
+        self.test_cache.append((miou_per, mof_per, f1_per, segments[0], gt[0], mask[0], fname[0]))
+
         return None
     
     def on_validation_epoch_end(self):
         self.log('val_nmi_full', self.nmi.compute())
         self.log('val_ari_full', self.ari.compute())
-        mean_mof, tp_count, n_frames = self.mof.compute(exclude_cls=self.exclude_cls)
+        mean_mof, tp_count, n_frames, _ = self.mof.compute(exclude_cls=self.exclude_cls)
         mean_f1, precision, recall, n_videos, segments_count = self.f1.compute(exclude_cls=self.exclude_cls)
         mean_f1_w, precision_w, recall_w, n_videos_w, segments_count_w = self.f1_w.compute(exclude_cls=self.exclude_cls)
         mean_iou, tp_count1, union_count = self.iou.compute(exclude_cls=self.exclude_cls)
+        mean_mean_iou, _, _ = self.miou.compute(exclude_cls=self.exclude_cls)
         self.log('val_mof_full', mean_mof)
         self.log('val_f1_full', mean_f1)
         self.log('val_f1_weird_full', mean_f1_w)
         self.log('val_iou_full', mean_iou)
+        self.log('val_mean_iou_full', mean_mean_iou)
         self.nmi.reset()
         self.ari.reset()
         self.mof.reset()
         self.f1.reset()
         self.f1_w.reset()
         self.iou.reset()
+        self.miou.reset()
 
     def on_test_epoch_end(self):
         self.log('test_nmi_full', self.nmi.compute(exclude_cls=self.exclude_cls))
         self.log('test_ari_full', self.ari.compute(exclude_cls=self.exclude_cls))
-        mean_mof, tp_count, n_frames = self.mof.compute(exclude_cls=self.exclude_cls)
+        mean_mof, tp_count, n_frames, pred_to_gt = self.mof.compute(exclude_cls=self.exclude_cls)
         mean_f1, precision, recall, n_videos, segments_count = self.f1.compute(exclude_cls=self.exclude_cls)
         mean_f1_w, precision_w, recall_w, n_videos_w, segments_count_w = self.f1_w.compute(exclude_cls=self.exclude_cls)
         mean_iou, tp_count1, union_count = self.iou.compute(exclude_cls=self.exclude_cls)
+        mean_mean_iou, _, _ = self.miou.compute(exclude_cls=self.exclude_cls)
         self.log('test_mof_full', mean_mof)
         self.log('test_tp_full', tp_count)
         self.log('test_n_frames', n_frames)
@@ -279,12 +301,21 @@ class VideoSSL(pl.LightningModule):
         self.log('test_n_segments_gt', segments_count)
         self.log('test_iou_full', mean_iou)
         self.log('test_union_full', union_count)
+        self.log('test_mean_iou_full', mean_mean_iou)
+        self.test_cache = sorted(self.test_cache, key=lambda x: x[0], reverse=True)
+        if wandb.run is not None:
+            for i, (miou, mof, f1, pred, gt, mask, fname) in enumerate(self.test_cache[:10]):
+                fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt, gt_uniq=np.unique(self.mof.gt_labels),
+                                        name=f'{fname} - MoF: {mof:.3f}, F1: {f1:.3f}, mIOU: {miou:.3f}')
+                wandb.log({f"test_segment_{i}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
+        self.test_cache = []
         self.nmi.reset()
         self.ari.reset()
         self.mof.reset()
         self.f1.reset()
         self.f1_w.reset()
         self.iou.reset()
+        self.miou.reset()
 
     def on_train_epoch_end(self):
         if self.current_epoch == self.prior_ep:
@@ -324,6 +355,69 @@ def update_moving_average(ema_updater, ma_model, current_model):
     for current_params, ma_params in zip(current_model.parameters(), ma_model.parameters()):
         old_weight, up_weight = ma_params.data, current_params.data
         ma_params.data = ema_updater.update_average(old_weight, up_weight)
+
+
+def plot_segmentation(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls=None, name=''):
+    colors = {}
+    cmap = plt.get_cmap('tab20')
+
+    pred_, gt_ = filter_exclusions(pred[mask].cpu().numpy(), gt[mask].cpu().numpy(), exclude_cls)
+    if pred_to_gt is None:
+        pred_opt, gt_opt = pred_to_gt_match(pred_, gt_)
+    else:
+        pred_opt, gt_opt = zip(*pred_to_gt.items())
+    for pr_lab, gt_lab in zip(pred_opt, gt_opt):
+        pred_[pred_ == pr_lab] = gt_lab
+    n_frames = len(pred_)
+
+    # add colors for predictions which do not match to a gt class
+
+    if gt_uniq is None:
+        gt_uniq = np.unique(gt_.cpu().numpy())
+    pred_not_matched = np.setdiff1d(pred_opt, gt_uniq)
+    if len(pred_not_matched) > 0:
+        gt_uniq = np.concatenate((gt_uniq, pred_not_matched))
+
+    for i, label in enumerate(gt_uniq):
+        if label == -1:
+            colors[label] = (0, 0, 0)
+        else:
+            colors[label] = cmap(i / len(gt_uniq))
+
+    fig = plt.figure(figsize=(16, 4))
+    plt.axis('off')
+    plt.title(name, fontsize=30, pad=20)
+
+    # plot gt segmentation
+
+    ax = fig.add_subplot(2, 1, 1)
+    ax.set_ylabel('GT', fontsize=30, rotation=0, labelpad=40, verticalalignment='center')
+    ax.set_yticklabels([])
+    ax.set_xticklabels([])
+
+    gt_segment_boundaries = np.where(gt_[1:] - gt_[:-1])[0] + 1
+    gt_segment_boundaries = np.concatenate(([0], gt_segment_boundaries, [len(gt_)]))
+
+    for start, end in zip(gt_segment_boundaries[:-1], gt_segment_boundaries[1:]):
+        label = gt_[start]
+        ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+
+    # plot predicted segmentation after matching to gt labels w/Hungarian
+
+    ax = fig.add_subplot(2, 1, 2)
+    ax.set_ylabel('Ours', fontsize=30, rotation=0, labelpad=60, verticalalignment='center')
+    ax.set_yticklabels([])
+    ax.set_xticklabels([])
+
+    pred_segment_boundaries = np.where(pred_[1:] - pred_[:-1])[0] + 1
+    pred_segment_boundaries = np.concatenate(([0], pred_segment_boundaries, [len(pred_)]))
+
+    for start, end in zip(pred_segment_boundaries[:-1], pred_segment_boundaries[1:]):
+        label = pred_[start]
+        ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+
+    fig.tight_layout()
+    return fig
 
 
 if __name__ == '__main__':
