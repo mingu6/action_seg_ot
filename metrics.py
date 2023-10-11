@@ -58,7 +58,7 @@ def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None):
     true_pos_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
         true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
-    return true_pos_count / len(gt_labels_) , true_pos_count, len(gt_labels_)
+    return true_pos_count / len(gt_labels_) , true_pos_count, len(gt_labels_), dict(zip(pred_opt, gt_opt))
 
 
 def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None):
@@ -73,13 +73,28 @@ def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None):
     return true_pos_count / union_count, true_pos_count, union_count
 
 
+def eval_meaniou(pred_labels, gt_labels, n_videos, exclude_cls=None):
+    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
+    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+
+    class_tp = []
+    class_union = []
+
+    for pred_lab, gt_lab in zip(pred_opt, gt_opt):
+        class_tp += [np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()]
+        class_union += [np.logical_or(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()]
+
+    mean_iou = sum([tp / un for tp, un in zip(class_tp, class_union)]) / len(np.unique(gt_labels_))
+    return mean_iou, sum(class_tp), sum(class_union)
+
+
 def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, n_sample=15, n_exper=50, eps=1e-8, weird=False):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
     n_actions = len(np.unique(gt_labels_))
 
     gt_segment_boundaries = np.where(gt_labels_[1:] - gt_labels_[:-1])[0] + 1
-    gt_segment_boundaries = np.concatenate(([0], gt_segment_boundaries))
+    gt_segment_boundaries = np.concatenate(([0], gt_segment_boundaries, [len(gt_labels_)-1]))
 
     tp_agg = 0.
     segments_count = 0
@@ -137,4 +152,5 @@ def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude
     return val / B
 
 
-score_fn_lookup = {'nmi': eval_nmi, 'ari': eval_ari, 'mof': eval_mof, 'f1': eval_f1, 'f1_w': lambda pl, gl, n, x: eval_f1(pl, gl, n, weird=True, exclude_cls=x), 'iou': eval_iou}
+score_fn_lookup = {'nmi': eval_nmi, 'ari': eval_ari, 'mof': eval_mof, 'f1': eval_f1,
+                   'f1_w': lambda pl, gl, n, x: eval_f1(pl, gl, n, weird=True, exclude_cls=x), 'iou': eval_iou, 'mean_iou': eval_meaniou}
