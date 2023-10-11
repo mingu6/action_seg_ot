@@ -1,27 +1,9 @@
+import math
 import numpy as np
 
 import torch
 import torch.nn.functional as F
 
-
-def construct_Cv_joint(N, r, B, c, device):
-    intra_cost = construct_Cv_indep(N, r, device)
-    full_cost = torch.full((B * N, B * N), c, dtype=torch.float, device=device)
-    for b in range(B):
-        full_cost[b*N:(b+1)*N, b*N:(b+1)*N] = intra_cost
-    return full_cost
-
-
-# def construct_Cv_indep(N, r, device):
-#     frame_distance = torch.arange(N, device=device).unsqueeze(1)
-#     cost = (frame_distance.T - frame_distance).float()
-#     cost[(cost <= r) * (cost > 0.)] = 1.
-#     cost[cost < 0.] = 0.
-#     cost[cost > r] = 0.
-
-#     cost /= (cost.sum(dim=1, keepdim=True) + 1e-8)
-
-#     return cost
 
 def construct_Cv_indep(N, r, device):
     frame_distance = torch.arange(N, device=device).unsqueeze(1)
@@ -29,17 +11,11 @@ def construct_Cv_indep(N, r, device):
     cost[cost <= r] = 1.# / r
     cost[cost > r] = 0.
     cost -= torch.eye(N, device=device)
-    # cost /= (cost.sum(dim=1)[:, None] + 1e-8)
     return cost
 
 
 def construct_Ck(K, beta, device):
     Ck = -torch.eye(K, device=device) + 1.
-
-    # Ck_l = torch.tril(Ck)
-    # Ck_u = Ck_l.T * beta
-    # Ck = Ck_l + Ck_u
-    # Ck += torch.eye(K, device=device) * 0.
     return Ck
 
 
@@ -65,8 +41,31 @@ def kl_mat(X, Y):
     return (X * torch.log(X / Y) - X + Y).sum()
 
 
-def segment_joint(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=10, inter_cost=0.1, sigma=5., rho=0.1,
-                  proj='const', proj_weight=0.1, n_iters=(10, 10), stable_thres=7.):
+def temporal_prior(n_frames, n_clusters, rho, device):
+    temp_prior = torch.abs(torch.arange(n_frames)[:, None] / n_frames - torch.arange(n_clusters)[None, :] / n_clusters).to(device)
+    return rho * temp_prior
+
+
+def temporal_prior_subact(B, n_frames, n_clusters, n_activities, activity_ind, rho, other_act_wt, device):
+    temp_prior = torch.ones((B, n_frames, n_clusters), device=device) * other_act_wt
+    n_clusters_act = int(math.ceil(n_clusters / n_activities))  # number of subactions associated to each activity
+    for b in range(B):
+        n_clusters_act1 = n_clusters - n_clusters_act * activity_ind[b].item() if n_activities == activity_ind[b] + 1 else n_clusters_act  # last activity may have fewer actions
+        temp_prior_blk = torch.abs(torch.arange(n_frames)[:, None] / n_frames - torch.arange(n_clusters_act1)[None, :] / n_clusters_act1).to(device)
+        temp_prior[b, :, activity_ind[b] * n_clusters_act:activity_ind[b] * n_clusters_act + n_clusters_act1] = temp_prior_blk
+    return temp_prior * rho
+
+
+def construct_Cv_joint(N, r, B, c, device):
+    intra_cost = construct_Cv_indep(N, r, device)
+    full_cost = torch.full((B * N, B * N), c, dtype=torch.float, device=device)
+    for b in range(B):
+        full_cost[b*N:(b+1)*N, b*N:(b+1)*N] = intra_cost
+    return full_cost
+
+
+def segment_joint(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=10, inter_cost=0., sigma=5., rho=0.1,
+                  proj='const', proj_weight=0.1, n_iters=(10, 10), stable_thres=7., temp_prior=None):
     B, N, _ = seq_features.shape
     n_c = clusters.shape[0]
     M = (1. - seq_features @ clusters.T.unsqueeze(0))
@@ -81,12 +80,10 @@ def segment_joint(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=10, 
     else:
         raise ValueError('Invalid proxdiv function for scaling iterations')
     
-    temp_prior = torch.abs(torch.arange(N)[:, None] / N - torch.arange(n_c)[None, :] / n_c) / np.sqrt(1. / N ** 2 + 1 / n_c ** 2)
-    temp_prior = torch.exp(-temp_prior / (sigma))
-    temp_prior /= temp_prior.sum(dim=1, keepdim=True)
-    M -= rho * torch.log(temp_prior.to(M.device)).repeat(B, 1)
+    if temp_prior is not None:
+        M = M + temp_prior.reshape(B * N, n_c)
 
-    Q = torch.exp(-M / eps)
+    Q = torch.exp(-M)
     Q = Q / Q.sum(dim=1, keepdim=True)
 
     Cv = construct_Cv_joint(N, radius, B, inter_cost, Q.device)
@@ -125,25 +122,17 @@ def segment_joint(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=10, 
 
 
 def segment_indep(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=10, sigma=5., 
-                  proj='const', proj_weight=0.1, n_iters=(3, 2), stable_thres=7., rho=0.1):
+                  proj='const', proj_weight=0.1, n_iters=(3, 2), stable_thres=7., temp_prior=None):
     B, N, _ = seq_features.shape
     n_c = clusters.shape[0]
     M = (1. - seq_features @ clusters.T.unsqueeze(0))
-    # Mp = torch.exp(-M)# / 0.5)
-    # Mp /= Mp.sum(dim=2, keepdim=True)
-    # M = -torch.log(Mp)
     nnz = mask.sum(dim=1)
-
-    # Q = torch.exp(-M)
-    # Q = Q / Q.sum(dim=2, keepdim=True)
     
-
-    temp_prior = torch.abs(torch.arange(N)[:, None] / N - torch.arange(n_c)[None, :] / n_c).to(M.device)
-    M += rho * temp_prior
+    if temp_prior is not None:
+        M = M + temp_prior
 
     Q = torch.exp(-M)
     Q = Q / Q.sum(dim=2, keepdim=True)
-    # Q = torch.ones_like(M) / n_c
 
     Cv = construct_Cv_indep(N, radius, Q.device)
     Ck = construct_Ck(n_c, 1., Q.device)
