@@ -66,6 +66,7 @@ class VideoSSL(pl.LightningModule):
             layers = [nn.Sequential(nn.Linear(sz, sz1), nn.ReLU()) for sz, sz1 in zip(layer_sizes[:-2], layer_sizes[1:-1])]
         layers += [nn.Linear(layer_sizes[-2], layer_sizes[-1])]
         self.mlp = nn.Sequential(*layers)
+        # self.mlp = nn.Identity()
         # initialize cluster centers/codebook
         d = self.layer_sizes[-1]
         self.clusters = nn.parameter.Parameter(data=F.normalize(torch.randn(self.n_clusters, d), dim=-1), requires_grad=learn_clusters)
@@ -230,7 +231,7 @@ class VideoSSL(pl.LightningModule):
         # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
         #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
-                                    proj=self.ub_proj_type, proj_weight=0.01, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+                                           proj=self.ub_proj_type, proj_weight=0.01, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         segments = indep_codes.argmax(dim=2)
         self.nmi.update(segments, gt, mask)
         self.ari.update(segments, gt, mask)
@@ -257,7 +258,7 @@ class VideoSSL(pl.LightningModule):
         self.log('test_mean_iou_per', miou_per)
 
         # cache videos for plotting
-        self.test_cache.append((miou_per, mof_per, f1_per, segments[0], gt[0], mask[0], fname[0]))
+        self.test_cache.append([miou_per, mof_per, f1_per, segments[0], gt[0], mask[0], fname[0]])
 
         return None
     
@@ -302,11 +303,14 @@ class VideoSSL(pl.LightningModule):
         self.log('test_iou_full', mean_iou)
         self.log('test_union_full', union_count)
         self.log('test_mean_iou_full', mean_mean_iou)
+        # update MoF (TODO: tidy up)
+        # for i, (miou, mof, f1, pred, gt, mask, fname) in enumerate(self.test_cache):
+        #     self.test_cache[i][1] = indep_eval_metrics(pred, gt, mask, 'mof', exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt)
         self.test_cache = sorted(self.test_cache, key=lambda x: x[0], reverse=True)
         if wandb.run is not None:
             for i, (miou, mof, f1, pred, gt, mask, fname) in enumerate(self.test_cache[:10]):
                 fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt, gt_uniq=np.unique(self.mof.gt_labels),
-                                        name=f'{fname} - MoF: {mof:.3f}, F1: {f1:.3f}, mIOU: {miou:.3f}')
+                                        name=f'{fname}') #- MoF: {mof:.3f}, F1: {f1:.3f}, mIOU: {miou:.3f}')
                 wandb.log({f"test_segment_{i}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
         self.test_cache = []
         self.nmi.reset()

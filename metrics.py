@@ -22,8 +22,8 @@ class ClusteringMetrics(Metric):
         self.gt_labels.extend(gt_labels.flatten()[mask.flatten()].tolist())
         self.n_videos += pred_labels.shape[0]
 
-    def compute(self, exclude_cls=None):
-        metric = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos, exclude_cls)
+    def compute(self, exclude_cls=None, pred_to_gt=None):
+        metric = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos, exclude_cls, pred_to_gt)
         return metric
 
 
@@ -51,9 +51,12 @@ def pred_to_gt_match(pred_labels, gt_labels):
     return pred_opt, gt_opt
 
 
-def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None):
+def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    if pred_to_gt is None:
+        pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    else:
+        pred_opt, gt_opt = zip(*pred_to_gt.items())
 
     true_pos_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
@@ -61,9 +64,12 @@ def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None):
     return true_pos_count / len(gt_labels_) , true_pos_count, len(gt_labels_), dict(zip(pred_opt, gt_opt))
 
 
-def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None):
+def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    if pred_to_gt is None:
+        pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    else:
+        pred_opt, gt_opt = zip(*pred_to_gt.items())
 
     true_pos_count = 0
     union_count = 0
@@ -73,9 +79,12 @@ def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None):
     return true_pos_count / union_count, true_pos_count, union_count
 
 
-def eval_meaniou(pred_labels, gt_labels, n_videos, exclude_cls=None):
+def eval_meaniou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    if pred_to_gt is None:
+        pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    else:
+        pred_opt, gt_opt = zip(*pred_to_gt.items())
 
     class_tp = []
     class_union = []
@@ -88,9 +97,12 @@ def eval_meaniou(pred_labels, gt_labels, n_videos, exclude_cls=None):
     return mean_iou, sum(class_tp), sum(class_union)
 
 
-def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, n_sample=15, n_exper=50, eps=1e-8, weird=False):
+def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None, n_sample=15, n_exper=50, eps=1e-8, weird=False):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    if pred_to_gt is None:
+        pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+    else:
+        pred_opt, gt_opt = zip(*pred_to_gt.items())
     n_actions = len(np.unique(gt_labels_))
 
     gt_segment_boundaries = np.where(gt_labels_[1:] - gt_labels_[:-1])[0] + 1
@@ -122,7 +134,7 @@ def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, n_sample=15, n_e
     return f1, precision, recall, n_videos, segments_count
 
 
-def eval_nmi(pred_labels, gt_labels, n_videos, exclude_cls=None):
+def eval_nmi(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     score = nmi_score(gt_labels_, pred_labels_)
     if type(score) is float:
@@ -131,12 +143,12 @@ def eval_nmi(pred_labels, gt_labels, n_videos, exclude_cls=None):
         return score.item()
 
 
-def eval_ari(pred_labels, gt_labels, n_videos, exclude_cls=None):
+def eval_ari(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     return adjusted_rand_score(gt_labels_, pred_labels_)
 
 
-def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude_cls=None):
+def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude_cls=None, pred_to_gt=None):
     """
     Evaluates each video sequence in a batch independently and aggregates results.
     """
@@ -144,7 +156,7 @@ def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude
     eval_fn = score_fn_lookup[metric]
     val = 0.
     for b in range(B):
-        score = eval_fn(pred_labels_batch[b][mask[b]].cpu().numpy(), gt_labels_batch[b][mask[b]].cpu().numpy(), 1, exclude_cls)
+        score = eval_fn(pred_labels_batch[b][mask[b]].cpu().numpy(), gt_labels_batch[b][mask[b]].cpu().numpy(), 1, exclude_cls, pred_to_gt)
         if type(score) is float:
             val += score
         else:
@@ -153,4 +165,4 @@ def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude
 
 
 score_fn_lookup = {'nmi': eval_nmi, 'ari': eval_ari, 'mof': eval_mof, 'f1': eval_f1,
-                   'f1_w': lambda pl, gl, n, x: eval_f1(pl, gl, n, weird=True, exclude_cls=x), 'iou': eval_iou, 'mean_iou': eval_meaniou}
+                   'f1_w': lambda pl, gl, n, x, pg: eval_f1(pl, gl, n, weird=True, exclude_cls=x, pred_to_gt=pg), 'iou': eval_iou, 'mean_iou': eval_meaniou}
