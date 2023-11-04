@@ -14,7 +14,7 @@ from scipy.spatial.distance import pdist, squareform
 from sklearn.cluster import KMeans
 
 from datasets.video_dataset import VideoDataset
-import seg_ot
+import asot
 from metrics import ClusteringMetrics, indep_eval_metrics, pred_to_gt_match, filter_exclusions
 
 num_eps = 1e-11
@@ -95,9 +95,9 @@ class VideoSSL(pl.LightningModule):
         codes = codes / codes.sum(dim=-1, keepdim=True)
         with torch.no_grad():  # pseudo-labels from OT
             features_opt = F.normalize(self.mlp_ma(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
-            temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
-            opt_codes = seg_ot.segment_indep(features_opt, self.clusters, mask, eps=self.train_eps, alpha=self.alpha, radius=self.gw_radius,
-                                             proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, temp_prior=temp_prior)
+            temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
+            opt_codes = asot.segment_asot(features_opt, self.clusters, mask, eps=self.train_eps, alpha=self.alpha, radius=self.gw_radius,
+                                          proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, temp_prior=temp_prior)
 
         loss_ce = -((opt_codes * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=2).mean()
         class_rep = (codes * mask[..., None]).mean(dim=[0,1])
@@ -116,8 +116,8 @@ class VideoSSL(pl.LightningModule):
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
 
         # log clustering metrics over full epoch
-        temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
-        indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=self.gw_radius,
+        temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
+        indep_codes = asot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=self.gw_radius,
                                            proj=self.ub_proj_type, proj_weight=0.01, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=self.gw_radius,
         #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, temp_prior=temp_prior)
@@ -151,8 +151,8 @@ class VideoSSL(pl.LightningModule):
         codes = torch.exp(features @ self.clusters.T / self.temp)
         codes /= codes.sum(dim=-1, keepdim=True)
         features_ma = F.normalize(self.mlp_ma(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
-        temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
-        pseudo_lab = seg_ot.segment_indep(features_ma, self.clusters, mask, eps=self.train_eps, alpha=self.alpha, radius=self.gw_radius,
+        temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
+        pseudo_lab = asot.segment_indep(features_ma, self.clusters, mask, eps=self.train_eps, alpha=self.alpha, radius=self.gw_radius,
                                           proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_train, temp_prior=temp_prior)
         loss_ce = -((pseudo_lab * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=[1, 2]).mean()
         self.log('val_ce_loss', loss_ce)
@@ -227,10 +227,10 @@ class VideoSSL(pl.LightningModule):
 
         # log clustering metrics over full epoch
         r_test = self.gw_radius / self.n_frames * T
-        temp_prior = seg_ot.temporal_prior(T, self.n_clusters, self.rho, features.device)
+        temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
         # indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
         #                                    proj=self.ub_proj_type, proj_weight=self.ub_weight, n_iters=self.n_ot_eval, temp_prior=temp_prior)
-        indep_codes = seg_ot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
+        indep_codes = asot.segment_indep(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha, radius=r_test,
                                            proj=self.ub_proj_type, proj_weight=0.01, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         segments = indep_codes.argmax(dim=2)
         self.nmi.update(segments, gt, mask)
@@ -480,6 +480,11 @@ if __name__ == '__main__':
     if args.ckpt is not None:
         ssl = VideoSSL.load_from_checkpoint(args.ckpt)
     else:
+        # ub train / eval
+        # remove ema, bn, prior factor, prior epoch, entropy train, inter_vid_cost
+        # radius w.r.t. N? ratio?
+        # proj_type
+        # alpha_train, alpha_test
         ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha=args.alpha, ub_weight=args.ub_weight, train_eps=args.eps_train, eval_eps=args.eps_eval,
                     gw_radius=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval, inter_vid_cost=args.inter_vid_cost,
                     learn_clusters=args.clusters_learn, n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, ema=args.ema,
