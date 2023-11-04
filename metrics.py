@@ -61,25 +61,10 @@ def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None
     true_pos_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
         true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
-    return true_pos_count / len(gt_labels_) , true_pos_count, len(gt_labels_), dict(zip(pred_opt, gt_opt))
+    return true_pos_count / len(gt_labels_) , pred_to_gt
 
 
-def eval_iou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
-    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    if pred_to_gt is None:
-        pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
-    else:
-        pred_opt, gt_opt = zip(*pred_to_gt.items())
-
-    true_pos_count = 0
-    union_count = 0
-    for pred_lab, gt_lab in zip(pred_opt, gt_opt):
-        true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
-        union_count += np.logical_or(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
-    return true_pos_count / union_count, true_pos_count, union_count
-
-
-def eval_meaniou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
+def eval_miou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     if pred_to_gt is None:
         pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
@@ -94,10 +79,10 @@ def eval_meaniou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=
         class_union += [np.logical_or(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()]
 
     mean_iou = sum([tp / un for tp, un in zip(class_tp, class_union)]) / len(np.unique(gt_labels_))
-    return mean_iou, sum(class_tp), sum(class_union)
+    return mean_iou, pred_to_gt
 
 
-def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None, n_sample=15, n_exper=50, eps=1e-8, weird=False):
+def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None, n_sample=15, n_exper=50, eps=1e-8):
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     if pred_to_gt is None:
         pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
@@ -113,8 +98,6 @@ def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None,
 
     for it in range(n_exper):
         for lo, up in zip(gt_segment_boundaries[:-1], gt_segment_boundaries[1:]):
-            # if up - lo == 1:
-            #     continue
             sample_idx = np.random.random_integers(lo, up, n_sample)
             gt_lab = gt_labels_[lo]
             if gt_lab in gt_opt:
@@ -122,47 +105,31 @@ def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None,
                 tp = (pred_labels_[sample_idx] == pred_lab).sum()
             else:
                 tp = 0.  # never predicted this gt label, so no true positives
-            if weird:
-                tp_agg += tp / n_sample
-            elif tp / n_sample > 0.5:
+            if tp / n_sample > 0.5:
                 tp_agg += 1
             if it == 0:
                 segments_count += 1
     precision = tp_agg / (n_videos * n_actions * n_exper)
     recall = tp_agg / (segments_count * n_exper + eps)
     f1 = 2. * (precision * recall) / (precision + recall + eps)
-    return f1, precision, recall, n_videos, segments_count
+    return f1, pred_to_gt
 
 
-def eval_nmi(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
-    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    score = nmi_score(gt_labels_, pred_labels_)
-    if type(score) is float:
-        return score
-    else:
-        return score.item()
-
-
-def eval_ari(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None):
-    pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
-    return adjusted_rand_score(gt_labels_, pred_labels_)
-
-
-def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metric, exclude_cls=None, pred_to_gt=None):
+def indep_eval_metrics(pred_labels_batch, gt_labels_batch, mask, metrics=['mof', 'f1', 'miou'], exclude_cls=None, pred_to_gt=None):
     """
-    Evaluates each video sequence in a batch independently and aggregates results.
+    Evaluates each video sequence in a batch independently and aggregates results. Handles multiple metrics at once
     """
     B = len(pred_labels_batch)
-    eval_fn = score_fn_lookup[metric]
-    val = 0.
+
+    values = {metric: 0. for metric in metrics}
+
     for b in range(B):
-        score = eval_fn(pred_labels_batch[b][mask[b]].cpu().numpy(), gt_labels_batch[b][mask[b]].cpu().numpy(), 1, exclude_cls, pred_to_gt)
-        if type(score) is float:
-            val += score
-        else:
-            val += score[0]
-    return val / B
+        p2gt_local = None if pred_to_gt is None else pred_to_gt
+        for metric in metrics:
+            eval_fn = score_fn_lookup[metric]
+            score, p2gt_local = eval_fn(pred_labels_batch[b][mask[b]].cpu().numpy(), gt_labels_batch[b][mask[b]].cpu().numpy(), 1, exclude_cls, p2gt_local)
+            values[metric] += score / B
+    return values
 
 
-score_fn_lookup = {'nmi': eval_nmi, 'ari': eval_ari, 'mof': eval_mof, 'f1': eval_f1,
-                   'f1_w': lambda pl, gl, n, x, pg: eval_f1(pl, gl, n, weird=True, exclude_cls=x, pred_to_gt=pg), 'iou': eval_iou, 'mean_iou': eval_meaniou}
+score_fn_lookup = {'mof': eval_mof, 'f1': eval_f1, 'miou': eval_miou}

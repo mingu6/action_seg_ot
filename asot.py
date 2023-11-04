@@ -8,10 +8,10 @@ import torch.nn.functional as F
 def construct_Cv(N, r, device):
     frame_distance = torch.arange(N, device=device).unsqueeze(1)
     cost = (frame_distance - frame_distance.T).abs().float()
-    cost[cost <= N * r] = 1. / r
+    cost[cost <= N * r] = 1.
     cost[cost > N * r] = 0.
     cost -= torch.eye(N, device=device)
-    return cost
+    return cost / r
 
 
 def construct_Ck(K, device):
@@ -47,7 +47,7 @@ def temporal_prior(n_frames, n_clusters, rho, device):
 
 
 def segment_asot(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=0.04, proj_type='const',
-                 proj_weight=0.1, n_iters=(25, 15), stable_thres=7., temp_prior=None):
+                 ub_weight=0.05, n_iters=(25, 15), stable_thres=7., temp_prior=None):
     B, N, _ = seq_features.shape
     n_c = clusters.shape[0]
     M = (1. - seq_features @ clusters.T.unsqueeze(0))
@@ -84,9 +84,9 @@ def segment_asot(seq_features, clusters, mask, eps=0.05, alpha=0.3, radius=0.04,
         v = torch.zeros((n_c, 1), device=Q.device)
 
         for i in range(n_iters[1]):
-            a = proxdiv_const(K @ b, u, eps, dx, proj_weight)
+            a = proxdiv_const(K @ b, u, eps, dx, ub_weight)
             a = torch.nan_to_num(a, posinf=0., neginf=0.)
-            b = proxdiv_fn(K.transpose(1, 2) @ a, v, eps, dy, proj_weight)
+            b = proxdiv_fn(K.transpose(1, 2) @ a, v, eps, dy, ub_weight)
             b = torch.nan_to_num(b, posinf=0., neginf=0.)
             if torch.any(torch.log(a).abs() > stable_thres) or torch.any(torch.log(b).abs() > stable_thres):
                 if i != n_iters[1] - 1:
