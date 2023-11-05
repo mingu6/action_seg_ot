@@ -22,7 +22,7 @@ num_eps = 1e-11
 
 class VideoSSL(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3, n_ot_train=[5, 3], n_ot_eval=[25, 10],
-                 train_eps=0.06, eval_eps=0.01, ub_proj_type='kl', ub_train=0.05, ub_eval=0.01, temp=0.1, radius_gw=0.04, learn_clusters=False,
+                 train_eps=0.06, eval_eps=0.01, ub_proj_type='kl', ub_train=0.05, ub_eval=0.01, temp=0.1, radius_gw=0.04, learn_clusters=True,
                  n_frames=256, rho=0.1, exclude_cls=None):
         super().__init__()
         self.lr = lr
@@ -219,7 +219,7 @@ class VideoSSL(pl.LightningModule):
             self.test_cache = sorted(self.test_cache, key=lambda x: x[0], reverse=True)
 
             for i, (mof, pred, gt, mask, fname) in enumerate(self.test_cache[:10]):
-                fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt, gt_uniq=np.unique(self.mof.gt_labels), name=f'{fname}')
+                fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt, gt_uniq=np.unique(self.mof.gt_labels), name=f'{fname[0]}')
                 wandb.log({f"test_segment_{i}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
         self.test_cache = []
         self.mof.reset()
@@ -365,7 +365,7 @@ if __name__ == '__main__':
     else:
         ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha_train=args.alpha_train, alpha_eval=args.alpha_eval, ub_train=args.ub_train, ub_eval=args.ub_eval,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
-                       learn_clusters=args.clusters_learn, n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, exclude_cls=args.exclude)
+                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, exclude_cls=args.exclude)
 
     activity_name = '_'.join(args.activity)
     name = f'{args.dataset}_{activity_name}_{args.group}_seed_{args.seed}'
