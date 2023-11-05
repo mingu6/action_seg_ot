@@ -80,6 +80,7 @@ class VideoSSL(pl.LightningModule):
         features_raw, mask, gt, fname, n_subactions = batch
         D = self.layer_sizes[-1]
         B, T, _ = features_raw.shape
+        # import pdb; pdb.set_trace()
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
 
         # log clustering metrics over full epoch
@@ -190,7 +191,7 @@ class VideoSSL(pl.LightningModule):
         self.log('test_miou_per', metrics['miou'])
 
         # cache videos for plotting
-        self.test_cache.append([metrics['mof'], segments[0], gt[0], mask[0], fname[0]])
+        self.test_cache.append([metrics['mof'], segments, gt, mask, fname])
 
         return None
     
@@ -301,7 +302,10 @@ def plot_segmentation(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls
 
     for start, end in zip(pred_segment_boundaries[:-1], pred_segment_boundaries[1:]):
         label = pred_[start]
-        ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+        try:
+            ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+        except:
+            import pdb; pdb.set_trace()
 
     fig.tight_layout()
     return fig

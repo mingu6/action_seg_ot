@@ -23,8 +23,8 @@ class ClusteringMetrics(Metric):
         self.n_videos += pred_labels.shape[0]
 
     def compute(self, exclude_cls=None, pred_to_gt=None):
-        metric = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos, exclude_cls, pred_to_gt)
-        return metric
+        metric, pred_to_gt = self.metric_fn(np.array(self.pred_labels), np.array(self.gt_labels), self.n_videos, exclude_cls, pred_to_gt)
+        return metric, pred_to_gt
 
 
 def filter_exclusions(pred_labels, gt_labels, excl_cls):
@@ -55,12 +55,17 @@ def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     if pred_to_gt is None:
         pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+        pred_to_gt = dict(zip(pred_opt, gt_opt))
     else:
         pred_opt, gt_opt = zip(*pred_to_gt.items())
 
     true_pos_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
         true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
+    try:
+        true_pos_count / len(gt_labels_)
+    except:
+        import pdb; pdb.set_trace()
     return true_pos_count / len(gt_labels_) , pred_to_gt
 
 
@@ -68,6 +73,7 @@ def eval_miou(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=Non
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     if pred_to_gt is None:
         pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+        pred_to_gt = dict(zip(pred_opt, gt_opt))
     else:
         pred_opt, gt_opt = zip(*pred_to_gt.items())
 
@@ -86,8 +92,10 @@ def eval_f1(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None,
     pred_labels_, gt_labels_ = filter_exclusions(pred_labels, gt_labels, exclude_cls)
     if pred_to_gt is None:
         pred_opt, gt_opt = pred_to_gt_match(pred_labels_, gt_labels_)
+        pred_to_gt = dict(zip(pred_opt, gt_opt))
     else:
         pred_opt, gt_opt = zip(*pred_to_gt.items())
+        pred_opt, gt_opt  = np.array(pred_opt), np.array(gt_opt)
     n_actions = len(np.unique(gt_labels_))
 
     gt_segment_boundaries = np.where(gt_labels_[1:] - gt_labels_[:-1])[0] + 1
