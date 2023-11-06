@@ -22,43 +22,48 @@ num_eps = 1e-11
 
 
 class VideoSSL(pl.LightningModule):
-    def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3, n_ot_train=[5, 3], n_ot_eval=[25, 10],
+    def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3, n_ot_train=[25, 10], n_ot_eval=[25, 10],
                  train_eps=0.06, eval_eps=0.01, ub_proj_type='kl', ub_train=0.05, ub_eval=0.01, temp=0.1, radius_gw=0.04, learn_clusters=True,
                  n_frames=256, rho=0.1, exclude_cls=None, visualize=False):
         super().__init__()
         self.lr = lr
-        self.n_clusters = n_clusters
         self.weight_decay = weight_decay
+        self.n_clusters = n_clusters
+        self.learn_clusters = learn_clusters
         self.layer_sizes = layer_sizes
+        self.exclude_cls = exclude_cls
+        self.visualize = visualize
+
         self.alpha_train = alpha_train
         self.alpha_eval = alpha_eval
         self.n_ot_train = n_ot_train
         self.n_ot_eval = n_ot_eval
-        self.temp = temp
         self.train_eps = train_eps
         self.eval_eps = eval_eps
         self.radius_gw = radius_gw
         self.ub_proj_type = ub_proj_type
         self.ub_train = ub_train
         self.ub_eval = ub_eval
-        self.learn_clusters = learn_clusters
+
+        self.temp = temp
         self.n_frames = n_frames
         self.rho = rho
-        self.exclude_cls = exclude_cls
+
         # initialize MLP
         layers = [nn.Sequential(nn.Linear(sz, sz1), nn.ReLU()) for sz, sz1 in zip(layer_sizes[:-2], layer_sizes[1:-1])]
         layers += [nn.Linear(layer_sizes[-2], layer_sizes[-1])]
         self.mlp = nn.Sequential(*layers)
+
         # initialize cluster centers/codebook
         d = self.layer_sizes[-1]
         self.clusters = nn.parameter.Parameter(data=F.normalize(torch.randn(self.n_clusters, d), dim=-1), requires_grad=learn_clusters)
+
         # initialize evaluation metrics
         self.mof = ClusteringMetrics(metric='mof')
         self.f1 = ClusteringMetrics(metric='f1')
         self.miou = ClusteringMetrics(metric='miou')
         self.save_hyperparameters()
         self.test_cache = []
-        self.visualize = visualize
 
     def training_step(self, batch, batch_idx):
         features_raw, mask, gt, fname, n_subactions = batch
@@ -196,6 +201,7 @@ class VideoSSL(pl.LightningModule):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train representation learning pipeline")
+
     # FUGW OT segmentation parameters
     parser.add_argument('--alpha-train', '-at', type=float, default=0.3, help='weighting of KOT term on frame features in OT')
     parser.add_argument('--alpha-eval', '-ae', type=float, default=0.3, help='weighting of KOT term on frame features in OT')
@@ -251,7 +257,7 @@ if __name__ == '__main__':
         ssl = VideoSSL.load_from_checkpoint(args.ckpt)
     else:
         ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha_train=args.alpha_train, alpha_eval=args.alpha_eval, ub_train=args.ub_train, ub_eval=args.ub_eval,
-                       train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
+                       ub_proj_type=args.proj_type, train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
                        n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, exclude_cls=args.exclude, visualize=args.visualize)
 
     activity_name = '_'.join(args.activity)
