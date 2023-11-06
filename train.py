@@ -15,7 +15,8 @@ from sklearn.cluster import KMeans
 
 from datasets.video_dataset import VideoDataset
 import asot
-from metrics import ClusteringMetrics, indep_eval_metrics, pred_to_gt_match, filter_exclusions
+from utils import *
+from metrics import ClusteringMetrics, indep_eval_metrics
 
 num_eps = 1e-11
 
@@ -23,7 +24,7 @@ num_eps = 1e-11
 class VideoSSL(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3, n_ot_train=[5, 3], n_ot_eval=[25, 10],
                  train_eps=0.06, eval_eps=0.01, ub_proj_type='kl', ub_train=0.05, ub_eval=0.01, temp=0.1, radius_gw=0.04, learn_clusters=True,
-                 n_frames=256, rho=0.1, exclude_cls=None):
+                 n_frames=256, rho=0.1, exclude_cls=None, visualize=False):
         super().__init__()
         self.lr = lr
         self.n_clusters = n_clusters
@@ -57,6 +58,7 @@ class VideoSSL(pl.LightningModule):
         self.miou = ClusteringMetrics(metric='miou')
         self.save_hyperparameters()
         self.test_cache = []
+        self.visualize = visualize
 
     def training_step(self, batch, batch_idx):
         features_raw, mask, gt, fname, n_subactions = batch
@@ -85,9 +87,9 @@ class VideoSSL(pl.LightningModule):
 
         # log clustering metrics over full epoch
         temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
-        indep_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
-                                        proj_type=self.ub_proj_type, ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
-        segments = indep_codes.argmax(dim=2)
+        segmentation = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
+                                         proj_type=self.ub_proj_type, ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+        segments = segmentation.argmax(dim=2)
         self.mof.update(segments, gt, mask)
         self.f1.update(segments, gt, mask)
         self.miou.update(segments, gt, mask)
@@ -99,74 +101,20 @@ class VideoSSL(pl.LightningModule):
         self.log('val_miou_per', metrics['miou'])
 
         # log validation loss
-
         codes = torch.exp(features @ self.clusters.T / self.temp)
         codes /= codes.sum(dim=-1, keepdim=True)
-        pseudo_lab = asot.segment_asot(features, self.clusters, mask, eps=self.train_eps, alpha=self.alpha_train, radius=self.radius_gw,
-                                       proj_type=self.ub_proj_type, ub_weight=self.ub_train, n_iters=self.n_ot_train, temp_prior=temp_prior)
-        loss_ce = -((pseudo_lab * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=[1, 2]).mean()
+        pseudo_labels = asot.segment_asot(features, self.clusters, mask, eps=self.train_eps, alpha=self.alpha_train, radius=self.radius_gw,
+                                          proj_type=self.ub_proj_type, ub_weight=self.ub_train, n_iters=self.n_ot_train, temp_prior=temp_prior)
+        loss_ce = -((pseudo_labels * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=[1, 2]).mean()
         self.log('val_loss', loss_ce)
 
-        gt_change = np.where((np.diff(gt[0].cpu().numpy()) != 0))[0] + 1
-        # plot qualitative examples of pseduo-labelling and embeddings for 5 videos evenly spaced
+        # plot qualitative examples of pseduo-labelling and embeddings for 5 videos evenly spaced in dataset
         spacing =  int(self.trainer.num_val_batches[0] / 5)
-        if batch_idx % spacing == 0 and wandb.run is not None:
-            img_idx = int(batch_idx / spacing)
-            # pairwise intra-video cosine distances
-            fdists = squareform(pdist(features[0].cpu().numpy(), 'cosine'))
-            fdists = np.nan_to_num(fdists)
-            fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-            plot1 = ax.matshow(fdists)
-            for ch in gt_change:
-                ax.axvline(ch, color='red')
-            plt.colorbar(plot1, ax=ax)
-            ax.set_title(fname[0])
-            ax.set_xlabel('Frame idx')
-            ax.set_ylabel('Frame idx')
-            wandb.log({f"val_pairwise_{img_idx}": fig, "trainer/global_step": self.trainer.global_step})
-            plt.close()
-
-            # P matrix of normalized feature/cluster similarities
-
-            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-            plot1 = ax.matshow(codes[0].cpu().numpy().T)
-            for ch in gt_change:
-                ax.axvline(ch, color='red')
-            ax.set_aspect('auto')
-            plt.colorbar(plot1, ax=ax)
-            ax.set_title(fname[0])
-            ax.set_xlabel('Frame idx')
-            ax.set_ylabel('Cluster idx')
-            wandb.log({f"val_P_{img_idx}": fig, "trainer/global_step": self.trainer.global_step}) 
-            plt.close()
-
-            # Q matrix of codes from OT pseudo-labelling (train/soft)
-
-            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-            plot1 = ax.matshow(pseudo_lab[0].cpu().numpy().T)
-            for ch in gt_change:
-                ax.axvline(ch, color='red')
-            ax.set_aspect('auto')
-            plt.colorbar(plot1, ax=ax)
-            ax.set_title(fname[0])
-            ax.set_xlabel('Frame idx')
-            ax.set_ylabel('Cluster idx')
-            wandb.log({f"val_OT_PL_{img_idx}": fig, "trainer/global_step": self.trainer.global_step}) 
-            plt.close()
-
-            # Q matrix of codes from OT pseudo-labelling (val/test, harder)
-
-            fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-            plot1 = ax.matshow(indep_codes[0].cpu().numpy().T)
-            for ch in gt_change:
-                ax.axvline(ch, color='red')
-            ax.set_aspect('auto')
-            plt.colorbar(plot1, ax=ax)
-            ax.set_title(fname[0])
-            ax.set_xlabel('Frame idx')
-            ax.set_ylabel('Cluster idx')
-            wandb.log({f"val_OT_pred_{img_idx}": fig, "trainer/global_step": self.trainer.global_step}) 
-            plt.close()
+        if batch_idx % spacing == 0 and wandb.run is not None and self.visualize:
+            plot_pairwise_frame_similarities(fname[0], int(batch_idx / spacing), features[0], gt[0], self.trainer.global_step)
+            plot_frame_cluster_similarities(fname[0], int(batch_idx / spacing), codes[0], gt[0], self.trainer.global_step)
+            plot_pseudo_labels(fname[0], int(batch_idx / spacing), pseudo_labels[0], gt[0], self.trainer.global_step)
+            plot_predictions(fname[0], int(batch_idx / spacing), pseudo_labels[0], gt[0], self.trainer.global_step)
         return None
     
     def test_step(self, batch, batch_idx):  # subsample videos
@@ -213,13 +161,14 @@ class VideoSSL(pl.LightningModule):
         self.log('test_mof_full', mof)
         self.log('test_f1_full', f1)
         self.log('test_miou_full', miou)
-        if wandb.run is not None:
+        if wandb.run is not None and self.visualize:
             for i, (mof, pred, gt, mask, fname) in enumerate(self.test_cache):
                 self.test_cache[i][0] = indep_eval_metrics(pred, gt, mask, ['mof'], exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt)['mof']
             self.test_cache = sorted(self.test_cache, key=lambda x: x[0], reverse=True)
 
             for i, (mof, pred, gt, mask, fname) in enumerate(self.test_cache[:10]):
-                fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt, gt_uniq=np.unique(self.mof.gt_labels), name=f'{fname[0]}')
+                fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt,
+                                        gt_uniq=np.unique(self.mof.gt_labels), name=f'{fname[0]}')
                 wandb.log({f"test_segment_{i}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
         self.test_cache = []
         self.mof.reset()
@@ -245,74 +194,9 @@ class VideoSSL(pl.LightningModule):
         return None
 
 
-def plot_segmentation(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls=None, name=''):
-    colors = {}
-    cmap = plt.get_cmap('tab20')
-
-    pred_, gt_ = filter_exclusions(pred[mask].cpu().numpy(), gt[mask].cpu().numpy(), exclude_cls)
-    if pred_to_gt is None:
-        pred_opt, gt_opt = pred_to_gt_match(pred_, gt_)
-    else:
-        pred_opt, gt_opt = zip(*pred_to_gt.items())
-    for pr_lab, gt_lab in zip(pred_opt, gt_opt):
-        pred_[pred_ == pr_lab] = gt_lab
-    n_frames = len(pred_)
-
-    # add colors for predictions which do not match to a gt class
-
-    if gt_uniq is None:
-        gt_uniq = np.unique(gt_.cpu().numpy())
-    pred_not_matched = np.setdiff1d(pred_opt, gt_uniq)
-    if len(pred_not_matched) > 0:
-        gt_uniq = np.concatenate((gt_uniq, pred_not_matched))
-
-    for i, label in enumerate(gt_uniq):
-        if label == -1:
-            colors[label] = (0, 0, 0)
-        else:
-            colors[label] = cmap(i / len(gt_uniq))
-
-    fig = plt.figure(figsize=(16, 4))
-    plt.axis('off')
-    plt.title(name, fontsize=30, pad=20)
-
-    # plot gt segmentation
-
-    ax = fig.add_subplot(2, 1, 1)
-    ax.set_ylabel('GT', fontsize=30, rotation=0, labelpad=40, verticalalignment='center')
-    ax.set_yticklabels([])
-    ax.set_xticklabels([])
-
-    gt_segment_boundaries = np.where(gt_[1:] - gt_[:-1])[0] + 1
-    gt_segment_boundaries = np.concatenate(([0], gt_segment_boundaries, [len(gt_)]))
-
-    for start, end in zip(gt_segment_boundaries[:-1], gt_segment_boundaries[1:]):
-        label = gt_[start]
-        ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
-
-    # plot predicted segmentation after matching to gt labels w/Hungarian
-
-    ax = fig.add_subplot(2, 1, 2)
-    ax.set_ylabel('Ours', fontsize=30, rotation=0, labelpad=60, verticalalignment='center')
-    ax.set_yticklabels([])
-    ax.set_xticklabels([])
-
-    pred_segment_boundaries = np.where(pred_[1:] - pred_[:-1])[0] + 1
-    pred_segment_boundaries = np.concatenate(([0], pred_segment_boundaries, [len(pred_)]))
-
-    for start, end in zip(pred_segment_boundaries[:-1], pred_segment_boundaries[1:]):
-        label = pred_[start]
-        try:
-            ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
-        except:
-            import pdb; pdb.set_trace()
-
-    fig.tight_layout()
-    return fig
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train representation learning pipeline")
+    # FUGW OT segmentation parameters
     parser.add_argument('--alpha-train', '-at', type=float, default=0.3, help='weighting of KOT term on frame features in OT')
     parser.add_argument('--alpha-eval', '-ae', type=float, default=0.3, help='weighting of KOT term on frame features in OT')
     parser.add_argument('--ub-train', '-ut', type=float, default=0.05, help='penalty on balanced classes assumption for training')
@@ -325,9 +209,15 @@ if __name__ == '__main__':
     parser.add_argument('--n-ot-train', '-nt', type=int, nargs='+', default=[25, 15], help='number of outer and inner Sinkhorn iterations for OT (train)')
     parser.add_argument('--n-ot-eval', '-no', type=int, nargs='+', default=[25, 15], help='number of outer and inner Sinkhorn iterations for OT (train)')
     
+    # dataset params
+    parser.add_argument('--base-path', '-p', type=str, default='/home/users/u6567085/data', help='base directory for dataset')
+    parser.add_argument('--dataset', '-d', type=str, required=True, help='dataset to use for training/eval (Breakfast, YTI, FSeval, FS, desktop_assembly)')
+    parser.add_argument('--activity', '-ac', type=str, nargs='+', required=True, help='activity classes to select for dataset')
+    parser.add_argument('--exclude', '-x', type=int, default=None, help='classes to exclude from evaluation. use -1 for YTI')
     parser.add_argument('--n-frames', '-f', type=int, default=256, help='number of frames sampled per video for train/val')
     parser.add_argument('--std-feats', '-s', action='store_true', help='standardize features per video during preprocessing')
     
+    # representation learning params
     parser.add_argument('--n-epochs', '-ne', type=int, default=15, help='number of epochs for training')
     parser.add_argument('--batch-size', '-bs', type=int, default=2, help='batch size')
     parser.add_argument('--learning-rate', '-lr', type=float, default=1e-3, help='learning rate')
@@ -336,15 +226,12 @@ if __name__ == '__main__':
     parser.add_argument('--layers', '-ls', default=[64, 128, 40], nargs='+', type=int, help='layer sizes for MLP (in, hidden, ..., out)')
     parser.add_argument('--rho', type=float, default=0.1, help='Factor for global structure weighting term')
     parser.add_argument('--n-clusters', '-c', type=int, default=8, help='number of actions/clusters')
-    parser.add_argument('--clusters-learn', '-lc', action='store_true', help='allow clusters to be learnable parameters')
 
-    parser.add_argument('--base-path', '-p', type=str, default='/home/users/u6567085/data', help='base directory for dataset')
-    parser.add_argument('--dataset', '-d', type=str, required=True, help='dataset to use for training/eval (Breakfast, YTI, FSeval, FS, desktop_assembly)')
-    parser.add_argument('--activity', '-ac', type=str, nargs='+', required=True, help='activity classes to select for dataset')
-    parser.add_argument('--exclude', '-x', type=int, default=None, help='classes to exclude from evaluation. use -1 for YTI')
+    # system/logging params
     parser.add_argument('--val-freq', '-vf', type=int, default=5, help='validation epoch frequency (epochs)')
     parser.add_argument('--gpu', '-g', type=int, default=1, help='gpu id to use')
     parser.add_argument('--wandb', '-w', action='store_true', help='use wandb for logging')
+    parser.add_argument('--visualize', '-v', action='store_true', help='generate visualizations during logging')
     parser.add_argument('--seed', type=int, default=0, help='Random seed initialization')
     parser.add_argument('--ckpt', type=str, help='path to checkpoint')
     parser.add_argument('--eval', action='store_true', help='run evaluation on test set only')
@@ -365,7 +252,7 @@ if __name__ == '__main__':
     else:
         ssl = VideoSSL(layer_sizes=args.layers, n_clusters=args.n_clusters, alpha_train=args.alpha_train, alpha_eval=args.alpha_eval, ub_train=args.ub_train, ub_eval=args.ub_eval,
                        train_eps=args.eps_train, eval_eps=args.eps_eval, radius_gw=args.radius_gw, n_ot_train=args.n_ot_train, n_ot_eval=args.n_ot_eval,
-                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, exclude_cls=args.exclude)
+                       n_frames=args.n_frames, lr=args.learning_rate, weight_decay=args.weight_decay, rho=args.rho, exclude_cls=args.exclude, visualize=args.visualize)
 
     activity_name = '_'.join(args.activity)
     name = f'{args.dataset}_{activity_name}_{args.group}_seed_{args.seed}'
