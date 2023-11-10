@@ -62,10 +62,6 @@ def eval_mof(pred_labels, gt_labels, n_videos, exclude_cls=None, pred_to_gt=None
     true_pos_count = 0
     for pred_lab, gt_lab in zip(pred_opt, gt_opt):
         true_pos_count += np.logical_and(pred_labels_ == pred_lab, gt_labels_ == gt_lab).sum()
-    try:
-        true_pos_count / len(gt_labels_)
-    except:
-        import pdb; pdb.set_trace()
     return true_pos_count / len(gt_labels_) , pred_to_gt
 
 
