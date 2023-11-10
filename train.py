@@ -116,10 +116,39 @@ class VideoSSL(pl.LightningModule):
         # plot qualitative examples of pseduo-labelling and embeddings for 5 videos evenly spaced in dataset
         spacing =  int(self.trainer.num_val_batches[0] / 5)
         if batch_idx % spacing == 0 and wandb.run is not None and self.visualize:
-            plot_pairwise_frame_similarities(fname[0], int(batch_idx / spacing), features[0], gt[0], self.trainer.global_step)
-            plot_frame_cluster_similarities(fname[0], int(batch_idx / spacing), codes[0], gt[0], self.trainer.global_step)
-            plot_pseudo_labels(fname[0], int(batch_idx / spacing), pseudo_labels[0], gt[0], self.trainer.global_step)
-            plot_predictions(fname[0], int(batch_idx / spacing), pseudo_labels[0], gt[0], self.trainer.global_step)
+            plot_idx = int(batch_idx / spacing)
+            gt_cpu = gt[0].cpu().numpy()
+
+            fdists = squareform(pdist(features[0].cpu().numpy(), 'cosine'))
+            fig = plot_matrix(fdists, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(5, 5), xlabel='Frame index', ylabel='Frame index')
+            wandb.log({f"val_pairwise_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(codes[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"val_P_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(pseudo_labels[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"val_OT_PL_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(segmentation[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"val_OT_pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            plt.close()
+
+            cost_mat = 1. - features @ self.clusters.T
+            bal_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
+                                            proj_type='const', ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+            nogw_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=0., radius=self.radius_gw,
+                                            proj_type=self.ub_proj_type, ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+            fig = plot_segmentation(segments[0], mask[0], name=f'{fname[0]}')
+            wandb.log({f"val_segment_{int(batch_idx / spacing)}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
+
+            fig = plot_matrix(segmentation[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(cost_mat[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"cost_mat_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(1. - cost_mat[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"aff_mat_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(bal_codes[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"bal_pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(nogw_codes[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"nogw_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            plt.close()
         return None
     
     def test_step(self, batch, batch_idx):  # subsample videos
@@ -172,9 +201,10 @@ class VideoSSL(pl.LightningModule):
             self.test_cache = sorted(self.test_cache, key=lambda x: x[0], reverse=True)
 
             for i, (mof, pred, gt, mask, fname) in enumerate(self.test_cache[:10]):
-                fig = plot_segmentation(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt,
-                                        gt_uniq=np.unique(self.mof.gt_labels), name=f'{fname[0]}')
+                fig = plot_segmentation_gt(gt, pred, mask, exclude_cls=self.exclude_cls, pred_to_gt=pred_to_gt,
+                                           gt_uniq=np.unique(self.mof.gt_labels), name=f'{fname[0]}')
                 wandb.log({f"test_segment_{i}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
+                plt.close()
         self.test_cache = []
         self.mof.reset()
         self.f1.reset()

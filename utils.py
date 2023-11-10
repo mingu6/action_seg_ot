@@ -7,7 +7,7 @@ import wandb
 from metrics import pred_to_gt_match, filter_exclusions
 
 
-def plot_segmentation(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls=None, name=''):
+def plot_segmentation_gt(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls=None, name=''):
     colors = {}
     cmap = plt.get_cmap('tab20')
 
@@ -70,63 +70,56 @@ def plot_segmentation(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls
     return fig
 
 
-def plot_pairwise_frame_similarities(fname, idx, features, gt, pl_global_step):
-    # pairwise intra-video cosine distances
-    gt_change = np.where((np.diff(gt.cpu().numpy()) != 0))[0] + 1
-    fdists = squareform(pdist(features.cpu().numpy(), 'cosine'))
-    fdists = np.nan_to_num(fdists)
-    fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    plot1 = ax.matshow(fdists)
-    for ch in gt_change:
-        ax.axvline(ch, color='red')
-    plt.colorbar(plot1, ax=ax)
-    ax.set_title(fname)
-    ax.set_xlabel('Frame idx')
-    ax.set_ylabel('Frame idx')
-    wandb.log({f"val_pairwise_{idx}": fig, "trainer/global_step": pl_global_step})
-    plt.close()
+def plot_segmentation(pred, mask, name=''):
+    colors = {}
+    cmap = plt.get_cmap('tab20')
+    uniq = np.unique(pred[mask].cpu().numpy())
+    n_frames = len(pred)
+
+    # add colors for predictions which do not match to a gt class
+
+    for i, label in enumerate(uniq):
+        if label == -1:
+            colors[label] = (0, 0, 0)
+        else:
+            colors[label] = cmap(i / len(uniq))
+
+    fig = plt.figure(figsize=(16, 2))
+    plt.axis('off')
+    plt.title(name, fontsize=30, pad=20)
+
+    # plot gt segmentation
+
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_yticklabels([])
+    ax.set_xticklabels([])
+
+    pred_segment_boundaries = np.where(pred[mask].cpu().numpy()[1:] - pred[mask].cpu().numpy()[:-1])[0] + 1
+    pred_segment_boundaries = np.concatenate(([0], pred_segment_boundaries, [len(pred)]))
+
+    for start, end in zip(pred_segment_boundaries[:-1], pred_segment_boundaries[1:]):
+        label = pred[mask].cpu().numpy()[start]
+        ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+
+    fig.tight_layout()
+    return fig
 
 
-def plot_frame_cluster_similarities(fname, idx, codes, gt, pl_global_step):
-    gt_change = np.where((np.diff(gt.cpu().numpy()) != 0))[0] + 1
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-    plot1 = ax.matshow(codes.cpu().numpy().T)
-    for ch in gt_change:
-        ax.axvline(ch, color='red')
+def plot_matrix(mat, gt=None, colorbar=True, title=None, figsize=(10, 5), ylabel=None, xlabel=None):
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    plot1 = ax.matshow(mat)
+    if gt is not None: # plot gt segment boundaries
+        gt_change = np.where((np.diff(gt) != 0))[0] + 1
+        for ch in gt_change:
+            ax.axvline(ch, color='red')
+    if colorbar:
+        plt.colorbar(plot1, ax=ax)
+    if title:
+        ax.set_title(f'{title}')
+    if xlabel is not None:
+        ax.set_xlabel(xlabel, fontsize=24)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=24)
     ax.set_aspect('auto')
-    plt.colorbar(plot1, ax=ax)
-    ax.set_title(fname)
-    ax.set_xlabel('Frame idx')
-    ax.set_ylabel('Cluster idx')
-    wandb.log({f"val_P_{idx}": fig, "trainer/global_step": pl_global_step}) 
-    plt.close()
-
-
-def plot_pseudo_labels(fname, idx, pseudo_labels, gt, pl_global_step):
-    gt_change = np.where((np.diff(gt.cpu().numpy()) != 0))[0] + 1
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-    plot1 = ax.matshow(pseudo_labels.cpu().numpy().T)
-    for ch in gt_change:
-        ax.axvline(ch, color='red')
-    ax.set_aspect('auto')
-    plt.colorbar(plot1, ax=ax)
-    ax.set_title(fname[0])
-    ax.set_xlabel('Frame idx')
-    ax.set_ylabel('Cluster idx')
-    wandb.log({f"val_OT_PL_{idx}": fig, "trainer/global_step": pl_global_step}) 
-    plt.close()
-
-
-def plot_predictions(fname, idx, segmentation, gt, pl_global_step):
-    gt_change = np.where((np.diff(gt.cpu().numpy()) != 0))[0] + 1
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-    plot1 = ax.matshow(segmentation.cpu().numpy().T)
-    for ch in gt_change:
-        ax.axvline(ch, color='red')
-    ax.set_aspect('auto')
-    plt.colorbar(plot1, ax=ax)
-    ax.set_title(fname[0])
-    ax.set_xlabel('Frame idx')
-    ax.set_ylabel('Cluster idx')
-    wandb.log({f"val_OT_pred_{idx}": fig, "trainer/global_step": pl_global_step})
-    plt.close()
+    fig.tight_layout()
+    return fig
