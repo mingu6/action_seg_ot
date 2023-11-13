@@ -130,25 +130,25 @@ class VideoSSL(pl.LightningModule):
             wandb.log({f"val_OT_pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
             plt.close()
 
-            cost_mat = 1. - features @ self.clusters.T
-            bal_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
-                                            proj_type='const', ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
-            nogw_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=0., radius=self.radius_gw,
-                                            proj_type=self.ub_proj_type, ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
-            fig = plot_segmentation(segments[0], mask[0], name=f'{fname[0]}')
-            wandb.log({f"val_segment_{int(batch_idx / spacing)}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
+            # cost_mat = 1. - features @ self.clusters.T
+            # bal_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
+            #                                 proj_type='const', ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+            # nogw_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=0., radius=self.radius_gw,
+            #                                 proj_type=self.ub_proj_type, ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
+            # fig = plot_segmentation(segments[0], mask[0], name=f'{fname[0]}')
+            # wandb.log({f"val_segment_{int(batch_idx / spacing)}": wandb.Image(fig), "trainer/global_step": self.trainer.global_step})
 
-            fig = plot_matrix(segmentation[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
-            wandb.log({f"pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
-            fig = plot_matrix(cost_mat[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
-            wandb.log({f"cost_mat_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
-            fig = plot_matrix(1. - cost_mat[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
-            wandb.log({f"aff_mat_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
-            fig = plot_matrix(bal_codes[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
-            wandb.log({f"bal_pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
-            fig = plot_matrix(nogw_codes[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
-            wandb.log({f"nogw_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
-            plt.close()
+            # fig = plot_matrix(segmentation[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            # wandb.log({f"pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            # fig = plot_matrix(cost_mat[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            # wandb.log({f"cost_mat_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            # fig = plot_matrix(1. - cost_mat[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            # wandb.log({f"aff_mat_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            # fig = plot_matrix(bal_codes[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            # wandb.log({f"bal_pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            # fig = plot_matrix(nogw_codes[0].cpu().numpy().T, gt=None, colorbar=False, title=None, xlabel='Frame index', ylabel='Action index')
+            # wandb.log({f"nogw_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            # plt.close()
         return None
     
     def test_step(self, batch, batch_idx):  # subsample videos
@@ -159,6 +159,7 @@ class VideoSSL(pl.LightningModule):
 
         # log clustering metrics over full epoch
         temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
+        # temp_prior = None
         indep_codes = asot.segment_asot(features, self.clusters, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
                                         proj_type=self.ub_proj_type, ub_weight=self.ub_eval, n_iters=self.n_ot_eval, temp_prior=temp_prior)
         segments = indep_codes.argmax(dim=2)
@@ -234,7 +235,7 @@ if __name__ == '__main__':
 
     # FUGW OT segmentation parameters
     parser.add_argument('--alpha-train', '-at', type=float, default=0.3, help='weighting of KOT term on frame features in OT')
-    parser.add_argument('--alpha-eval', '-ae', type=float, default=0.3, help='weighting of KOT term on frame features in OT')
+    parser.add_argument('--alpha-eval', '-ae', type=float, default=0.6, help='weighting of KOT term on frame features in OT')
     parser.add_argument('--ub-train', '-ut', type=float, default=0.05, help='penalty on balanced classes assumption for training')
     parser.add_argument('--ub-eval', '-ue', type=float, default=0.01, help='penalty on balanced classes assumption for eval')
     parser.add_argument('--proj-type', '-pt', type=str, default='kl', choices=['kl', 'tv', 'const'],

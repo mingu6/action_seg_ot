@@ -9,7 +9,6 @@ from metrics import pred_to_gt_match, filter_exclusions
 
 def plot_segmentation_gt(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_cls=None, name=''):
     colors = {}
-    cmap = plt.get_cmap('tab20')
 
     pred_, gt_ = filter_exclusions(pred[mask].cpu().numpy(), gt[mask].cpu().numpy(), exclude_cls)
     if pred_to_gt is None:
@@ -28,20 +27,28 @@ def plot_segmentation_gt(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_
     if len(pred_not_matched) > 0:
         gt_uniq = np.concatenate((gt_uniq, pred_not_matched))
 
+    n_class = len(gt_uniq)
+    if n_class <= 20:
+        cmap = plt.get_cmap('tab20')
+    else:  # up to 40 classes
+        cmap1 = plt.get_cmap('tab20')
+        cmap2 = plt.get_cmap('tab20b')
+        cmap = lambda x: cmap1(round(x * n_class / 20., 2)) if x <= 19. / n_class else cmap2(round((x - 20 / n_class) * n_class / 20, 2))
+
     for i, label in enumerate(gt_uniq):
         if label == -1:
             colors[label] = (0, 0, 0)
         else:
-            colors[label] = cmap(i / len(gt_uniq))
+            colors[label] = cmap(i / n_class)
 
     fig = plt.figure(figsize=(16, 4))
     plt.axis('off')
-    plt.title(name, fontsize=30, pad=20)
+    plt.title(name, fontsize=45, pad=20)
 
     # plot gt segmentation
 
     ax = fig.add_subplot(2, 1, 1)
-    ax.set_ylabel('GT', fontsize=30, rotation=0, labelpad=40, verticalalignment='center')
+    ax.set_ylabel('GT', fontsize=45, rotation=0, labelpad=40, verticalalignment='center')
     ax.set_yticklabels([])
     ax.set_xticklabels([])
 
@@ -51,11 +58,13 @@ def plot_segmentation_gt(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_
     for start, end in zip(gt_segment_boundaries[:-1], gt_segment_boundaries[1:]):
         label = gt_[start]
         ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+        ax.axvline(start / n_frames, color='black', linewidth=3)
+        ax.axvline(end / n_frames, color='black', linewidth=3)
 
     # plot predicted segmentation after matching to gt labels w/Hungarian
 
     ax = fig.add_subplot(2, 1, 2)
-    ax.set_ylabel('Ours', fontsize=30, rotation=0, labelpad=60, verticalalignment='center')
+    ax.set_ylabel('Ours', fontsize=45, rotation=0, labelpad=60, verticalalignment='center')
     ax.set_yticklabels([])
     ax.set_xticklabels([])
 
@@ -65,6 +74,8 @@ def plot_segmentation_gt(gt, pred, mask, gt_uniq=None, pred_to_gt=None, exclude_
     for start, end in zip(pred_segment_boundaries[:-1], pred_segment_boundaries[1:]):
         label = pred_[start]
         ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+        ax.axvline(start / n_frames, color='black', linewidth=3)
+        ax.axvline(end / n_frames, color='black', linewidth=3)
 
     fig.tight_layout()
     return fig
@@ -100,6 +111,8 @@ def plot_segmentation(pred, mask, name=''):
     for start, end in zip(pred_segment_boundaries[:-1], pred_segment_boundaries[1:]):
         label = pred[mask].cpu().numpy()[start]
         ax.axvspan(start / n_frames, end / n_frames, facecolor=colors[label], alpha=1.0)
+        ax.axvline(start / n_frames, color='black', linewidth=3)
+        ax.axvline(end / n_frames, color='black', linewidth=3)
 
     fig.tight_layout()
     return fig
@@ -117,9 +130,11 @@ def plot_matrix(mat, gt=None, colorbar=True, title=None, figsize=(10, 5), ylabel
     if title:
         ax.set_title(f'{title}')
     if xlabel is not None:
-        ax.set_xlabel(xlabel, fontsize=24)
+        ax.set_xlabel(xlabel, fontsize=36)
+        ax.tick_params(axis='x', labelsize=24)
     if ylabel is not None:
-        ax.set_ylabel(ylabel, fontsize=24)
+        ax.set_ylabel(ylabel, fontsize=36)
+        ax.tick_params(axis='y', labelsize=24)
     ax.set_aspect('auto')
     fig.tight_layout()
     return fig
