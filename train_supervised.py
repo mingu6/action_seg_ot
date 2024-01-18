@@ -23,7 +23,7 @@ num_eps = 1e-11
 
 class VideoSSL(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3,
-                 n_ot_train=[50, 1], n_ot_eval=[50, 1], step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=True,
+                 n_ot_train=[25, 10], n_ot_eval=[25, 10], step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=True,
                  lambda_frames_train=0.05, lambda_actions_train=0.05, lambda_frames_eval=0.05, lambda_actions_eval=0.01,
                  temp=0.1, radius_gw=0.04, learn_clusters=True, n_frames=256, rho=0.1, exclude_cls=None, visualize=False):
         super().__init__()
@@ -77,17 +77,12 @@ class VideoSSL(pl.LightningModule):
         D = self.layer_sizes[-1]
         B, T, _ = features_raw.shape
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
-        codes = torch.exp(features @ self.clusters.T[None, ...] / self.temp)
-        codes = codes / codes.sum(dim=-1, keepdim=True)
-        with torch.no_grad():  # pseudo-labels from OT
-            temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
-            cost_matrix = 1. - features @ self.clusters.T.unsqueeze(0)
-            cost_matrix += temp_prior
-            opt_codes, _ = asot.segment_asot(cost_matrix, mask, eps=self.train_eps, alpha=self.alpha_train, radius=self.radius_gw,
-                                             ub_frames=self.ub_frames, ub_actions=self.ub_actions, lambda_frames=self.lambda_frames_train,
-                                             lambda_actions=self.lambda_actions_train, n_iters=self.n_ot_train, step_size=self.step_size)
-
-        loss_ce = -((opt_codes * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=2).mean()
+        
+        cost_matrix = 1. - features @ self.clusters.T.unsqueeze(0)
+        pred, _ = asot.segment_asot(cost_matrix, mask, eps=self.train_eps, alpha=self.alpha_train, radius=self.radius_gw,
+                                    ub_frames=self.ub_frames, ub_actions=self.ub_actions, lambda_frames=self.lambda_frames_train,
+                                    lambda_actions=self.lambda_actions_train, n_iters=self.n_ot_train, step_size=self.step_size)
+        loss_ce = F.cross_entropy(torch.log(pred.reshape(-1, self.n_clusters) + 1e-8), gt.reshape(-1))
         self.log('train_loss', loss_ce)
         return loss_ce
 
@@ -95,13 +90,10 @@ class VideoSSL(pl.LightningModule):
         features_raw, mask, gt, fname, n_subactions = batch
         D = self.layer_sizes[-1]
         B, T, _ = features_raw.shape
-        # import pdb; pdb.set_trace()
         features = F.normalize(self.mlp(features_raw.reshape(-1, features_raw.shape[-1])).reshape(B, T, D), dim=-1)
 
         # log clustering metrics over full epoch
-        temp_prior = asot.temporal_prior(T, self.n_clusters, self.rho, features.device)
         cost_matrix = 1. - features @ self.clusters.T.unsqueeze(0)
-        cost_matrix += temp_prior
         segmentation, _ = asot.segment_asot(cost_matrix, mask, eps=self.eval_eps, alpha=self.alpha_eval, radius=self.radius_gw,
                                             ub_frames=self.ub_frames, ub_actions=self.ub_actions, lambda_frames=self.lambda_frames_eval,
                                             lambda_actions=self.lambda_actions_eval, n_iters=self.n_ot_eval, step_size=self.step_size)
@@ -117,13 +109,19 @@ class VideoSSL(pl.LightningModule):
         self.log('val_miou_per', metrics['miou'])
 
         # log validation loss
-        codes = torch.exp(features @ self.clusters.T / self.temp)
-        codes /= codes.sum(dim=-1, keepdim=True)
-        pseudo_labels, _ = asot.segment_asot(cost_matrix, mask, eps=self.train_eps, alpha=self.alpha_train, radius=self.radius_gw,
-                                             ub_frames=self.ub_frames, ub_actions=self.ub_actions, lambda_frames=self.lambda_frames_train,
-                                             lambda_actions=self.lambda_actions_train, n_iters=self.n_ot_train, step_size=self.step_size)
-        loss_ce = -((pseudo_labels * torch.log(codes + num_eps)) * mask[..., None]).sum(dim=[1, 2]).mean()
+        loss_ce = F.cross_entropy(torch.log(segmentation.reshape(-1, self.n_clusters) + 1e-8), gt.reshape(-1))
         self.log('val_loss', loss_ce)
+
+        # plot cost/similarity matrix
+        codes = torch.exp(features @ self.clusters.T)
+        codes /= codes.sum(dim=-1, keepdim=True)
+
+        # plot gt matrix
+        gt_mat = torch.zeros_like(cost_matrix)
+        for b in range(B):
+            for k in range(self.n_clusters):
+                gt_mask = gt[b, :] == k
+                gt_mat[b, gt_mask, k] = 1.
 
         # plot qualitative examples of pseduo-labelling and embeddings for 5 videos evenly spaced in dataset
         spacing =  int(self.trainer.num_val_batches[0] / 5)
@@ -138,8 +136,8 @@ class VideoSSL(pl.LightningModule):
             fig = plot_matrix(codes[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
             wandb.log({f"val_P_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
             plt.close()
-            fig = plot_matrix(pseudo_labels[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
-            wandb.log({f"val_OT_PL_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
+            fig = plot_matrix(gt_mat[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
+            wandb.log({f"val_gt_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
             plt.close()
             fig = plot_matrix(segmentation[0].cpu().numpy().T, gt=gt_cpu, colorbar=False, title=fname[0], figsize=(10, 5), xlabel='Frame index', ylabel='Action index')
             wandb.log({f"val_OT_pred_{plot_idx}": fig, "trainer/global_step": self.trainer.global_step})
@@ -261,11 +259,11 @@ if __name__ == '__main__':
     parser.add_argument('--lambda-actions-train', '-lat', type=float, default=0.05, help='penalty on balanced actions assumption for training')
     parser.add_argument('--lambda-frames-eval', '-lfe', type=float, default=0.05, help='penalty on balanced frames assumption for test')
     parser.add_argument('--lambda-actions-eval', '-lae', type=float, default=0.01, help='penalty on balanced actions assumption for test')
-    parser.add_argument('--eps-train', '-et', type=float, default=0.07, help='entropy regularization for OT during training')
-    parser.add_argument('--eps-eval', '-ee', type=float, default=0.04, help='entropy regularization for OT during val/test')
+    parser.add_argument('--eps-train', '-et', type=float, default=0.06, help='entropy regularization for OT during training')
+    parser.add_argument('--eps-eval', '-ee', type=float, default=0.01, help='entropy regularization for OT during val/test')
     parser.add_argument('--radius-gw', '-r', type=float, default=0.04, help='Radius parameter for GW structure loss')
-    parser.add_argument('--n-ot-train', '-nt', type=int, nargs='+', default=[25, 1], help='number of outer and inner iterations for ASOT solver (train)')
-    parser.add_argument('--n-ot-eval', '-no', type=int, nargs='+', default=[25, 1], help='number of outer and inner iterations for ASOT solver (eval)')
+    parser.add_argument('--n-ot-train', '-nt', type=int, nargs='+', default=[50, 1], help='number of outer and inner iterations for ASOT solver (train)')
+    parser.add_argument('--n-ot-eval', '-no', type=int, nargs='+', default=[50, 1], help='number of outer and inner iterations for ASOT solver (eval)')
     parser.add_argument('--step-size', '-ss', type=float, default=None,
                         help='Step size/learning rate for ASOT solver. Worth setting manually if ub-frames && ub-actions')
 

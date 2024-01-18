@@ -6,10 +6,6 @@ import torch
 from torch.utils.data import Dataset
 
 
-def parse_video_fnames(gt_dir, dataset):
-    None
-
-
 def parse_action_name(fname, dataset):
     if dataset == 'Breakfast':
         return fname.split('_')[-1]
@@ -65,7 +61,7 @@ class VideoDataset(Dataset):
         video_fname = self.video_fnames[idx]
         gt = [line.rstrip() for line in open(path.join(self.data_dir, 'groundTruth', video_fname))]
         inds, mask = self._partition_and_sample(self.n_frames, len(gt))
-        gt = torch.Tensor([self.action_mapping[gt[ind]] for ind in inds]).int()
+        gt = torch.Tensor([self.action_mapping[gt[ind]] for ind in inds]).long()
         action = parse_action_name(video_fname, self.dataset)
         feat_fname = path.join(self.data_dir, 'features', action, video_fname)
         try:
