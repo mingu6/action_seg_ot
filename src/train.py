@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial.distance import pdist, squareform
 from sklearn.cluster import KMeans
 
-from datasets.video_dataset import VideoDataset
+from video_dataset import VideoDataset
 import asot
 from utils import *
 from metrics import ClusteringMetrics, indep_eval_metrics
