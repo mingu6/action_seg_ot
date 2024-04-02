@@ -8,13 +8,15 @@ ASOT is a post-processing technique that decodes a temporally consistent class p
 
 For example, given an affinity matrix that looks like this
 
-![raw_affinities](affinity.png)
+![raw_affinities](examples/affinity.png)
 
 ASOT generates pseudo-labels that look like this
 
-![soft_assign](asot_soft_assign.png)
+![soft_assign](examples/soft_assign_asot.png)
 
-Unlike previous methods which use optimal transport for pseudo-labels, we account for the temporal consistency property inherent to video data. Furthermore, we use *unbalanced optimal transport* to account for long-tail action class distributions prevalent in video datasets.
+Unlike previous methods which use optimal transport for pseudo-labels, we account for the temporal consistency property inherent to video data. Furthermore, we use *unbalanced optimal transport* to account for long-tail action class distributions prevalent in video datasets. Regular optimal transport will produce pseudo-labels that look like this
+
+![soft_assign](examples/soft_assign_kot.png)
 
 ## Unsupervised learning pipeline
 
