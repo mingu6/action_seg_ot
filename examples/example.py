@@ -10,7 +10,7 @@ import asot
 device = 'cpu'
 
 vidname = '2020-04-19_14-03-25'  # desktop assembly
-# vidname = 'P36_webcam01_P36_salat'  # Breakfast (Salat)
+vidname = 'P36_webcam01_P36_salat'  # Breakfast (Salat)
 dataset = 'da' if '2020' in vidname else 'salat'
 
 ## set ASOT parameters
@@ -26,7 +26,7 @@ else:
     alpha = 0.6
     r = 0.04
 
-affinity = torch.from_numpy(np.load(f'data/{vidname}.npy'))
+affinity = torch.from_numpy(np.load(f'data/affinity/{vidname}.npy'))
 affinity = affinity.unsqueeze(0)
 matching_cost = 1. - affinity
 
@@ -36,8 +36,8 @@ def process_mapping(x):
     i, nm = x.rstrip().split(' ')
     return nm, int(i)
 
-action_mapping = dict(map(process_mapping, open(os.path.join('gt', f'mapping_{dataset}.txt'))))
-gt = [line.rstrip() for line in open(os.path.join('gt', vidname))]
+action_mapping = dict(map(process_mapping, open(os.path.join('data', 'gt', f'mapping_{dataset}.txt'))))
+gt = [line.rstrip() for line in open(os.path.join('data', 'gt', vidname))]
 gt = torch.Tensor(list(map(lambda x: action_mapping[x], gt))).int().to(device)
 
 ## run ASOT
@@ -50,7 +50,7 @@ fig = utils.plot_matrix(affinity.squeeze(0).cpu().T, gt=gt.cpu(), title='Raw aff
 plt.savefig('affinity.png')
 plt.clf()
 fig = utils.plot_matrix(soft_assign.squeeze(0).cpu().T, gt=gt.cpu(), title='ASOT solution (soft assignment)')
-plt.savefig('soft_assign.png')
+plt.savefig('soft_assign_asot.png')
 plt.clf()
 fig = utils.plot_segmentation_gt(gt, segmentation.squeeze(0), name=f'{vidname}')
 plt.savefig('segmentation.png')
