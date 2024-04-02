@@ -12,7 +12,7 @@ For example, given an affinity matrix that looks like this
 
 ASOT generates pseudo-labels that look like this
 
-![soft_assign](soft_assign.png)
+![soft_assign](asot_soft_assign.png)
 
 Unlike previous methods which use optimal transport for pseudo-labels, we account for the temporal consistency property inherent to video data. Furthermore, we use *unbalanced optimal transport* to account for long-tail action class distributions prevalent in video datasets.
 
@@ -20,7 +20,7 @@ Unlike previous methods which use optimal transport for pseudo-labels, we accoun
 
 Our unsupervised segmentation pipeline uses a joint representation learning and clustering formulation. A frame-wise feature extractor (MLP) and action cluster embeddings are jointly learned by using pseudo-labels generated per batch.
 
-![learning_pipeline](system_train.pdf)
+![learning_pipeline](system_train.png)
 
 See the main paper for results and SOTA comparison.
 
