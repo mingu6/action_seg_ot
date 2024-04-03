@@ -1,6 +1,6 @@
 # Temporally Consistent Unbalanced Optimal Transport for Unsupervised Action Segmentation
 
-This repo contains a reference implementation of our proposed method Action Segmentation Optimal Transport (ASOT), accepted to CVPR 2024. We also include our full training/evaluation pipelines for the unsupervised learning experiments in the paper.
+This repo contains a reference implementation of our proposed method Action Segmentation Optimal Transport (ASOT), accepted to CVPR 2024. We also include our full training/evaluation pipelines for the unsupervised learning experiments in the [paper](http://arxiv.org/abs/2404.01518).
 
 ## Action Segmentation Optimal Transport (ASOT)
 
