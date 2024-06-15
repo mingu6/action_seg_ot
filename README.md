@@ -22,7 +22,7 @@ Unlike previous methods which use optimal transport for pseudo-labels, we accoun
 
 Our unsupervised segmentation pipeline uses a joint representation learning and clustering formulation. A frame-wise feature extractor (MLP) and action cluster embeddings are jointly learned by using pseudo-labels generated per batch.
 
-![learning_pipeline](system_train.png)
+<img src = "system_train.png" width=50% height=50%>
 
 See the main paper for results and SOTA comparison.
 
