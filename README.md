@@ -1,36 +1,47 @@
 # Temporally Consistent Unbalanced Optimal Transport for Unsupervised Action Segmentation (CVPR 2024 Oral)
 
-This repo contains a reference implementation of our proposed method Action Segmentation Optimal Transport (ASOT), accepted to CVPR 2024. We also include our full training/evaluation pipelines for the unsupervised learning experiments in the [paper](http://arxiv.org/abs/2404.01518).
+This repo contains a reference implementation of our proposed method Action Segmentation Optimal Transport (ASOT), accepted to CVPR 2024. We also include our full training/evaluation pipelines for the experiments in the [paper](http://arxiv.org/abs/2404.01518).
 
-## Action Segmentation Optimal Transport (ASOT)
+## 1. Overview: Action Segmentation Optimal Transport (ASOT)
 
-ASOT is a post-processing technique that decodes a temporally consistent class predictions given a noisy affinity matrix. We use ASOT in the context of generating pseudo-labels within an unsupervised learning pipeline based on joint representation learning and clustering. 
+ASOT is a technique that decodes a set of temporally consistent class predictions given a noisy affinity matrix derived from a video (or a batch of videos) for the [action segmentation task](https://arxiv.org/abs/2210.10352). We use ASOT in the context of generating pseudo-labels within an unsupervised learning pipeline based on joint representation learning and clustering, e.g., [SeLA](https://arxiv.org/abs/1911.05371) for image classification datasets. A recent method [TOT](http://openaccess.thecvf.com/content/CVPR2022/html/Kumar_Unsupervised_Action_Segmentation_by_Joint_Representation_Learning_and_Online_Clustering_CVPR_2022_paper.html) uses optimal transport (OT) for pseudo-label generation, however, the OT method proposed in that paper is not aware of
 
-For example, given an affinity matrix that looks like this
+- the _temporal structure_ of the video task or
+- the _long-tail action class distributions_ inherent to this task.
 
-![raw_affinities](examples/affinity.png)
+### Example of Standard Optimal Transport
 
-ASOT generates pseudo-labels that look like this
+Standard optimal transport produces pseudo-labels like this, given a raw label assignment affinity/cost matrix.
 
-![soft_assign](examples/soft_assign_asot.png)
+<img src = "ex_standard.png" width=90% height=90%>
 
-Unlike previous methods which use optimal transport for pseudo-labels, we account for the temporal consistency property inherent to video data. Furthermore, we use *unbalanced optimal transport* to account for long-tail action class distributions prevalent in video datasets. Regular optimal transport will produce pseudo-labels that look like this
+ASOT however, generates pseudo-labels that look like _this_
 
-![soft_assign](examples/soft_assign_kot.png)
+<img src = "ex_asot.png" width=90% height=90%>
 
-## Unsupervised learning pipeline
+We use a _structure-aware optimal transport_ formulation which handles long-tail action class distributions. The temporal consistency property ineherent to videos is handled through Gromov-Wasserstein, whereas the long-tail class distributions is handled by including an unbalanced OT formulation.
+
+### Unsupervised learning pipeline
 
 Our unsupervised segmentation pipeline uses a joint representation learning and clustering formulation. A frame-wise feature extractor (MLP) and action cluster embeddings are jointly learned by using pseudo-labels generated per batch.
 
 <img src = "system_train.png" width=50% height=50%>
 
-See the main paper for results and SOTA comparison.
+See the main paper for results and SOTA comparison. Qualitative examples of our unsupervised learning algorithm are presented below.
 
-## Example code
+<img src = "qual_bf.png" width=30% height=30%> <img src = "qual_da.png" width=30% height=30%>
 
-We provide a self-contained example which shows how ASOT is used for post-processing in `examples/`. Run `example.py` and feel free to tune the ASOT parameters.
+ASOT handles _repeated actions_ and _order variations_ across videos natively as part of the pseudo-labelling. 
 
-# Re-run Unsupervised Learning Experiments
+We also find that encouraging pseudo-labels to follow a canonical order, similar to TOT also helps.
+
+# 2. Using the Code
+
+## Simple Example
+
+We provide a self-contained example which shows how ASOT is used for generating pseudo-labels in `examples/`. Run `example.py` and feel free to tune the ASOT parameters.
+
+## Re-run All Unsupervised Learning Experiments
 
 Some setup is required to run the unsupervised learning pipeline. Steps involve installing dependencies, setting up datasets and running the train/eval scripts.
 
