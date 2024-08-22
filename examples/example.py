@@ -17,12 +17,12 @@ dataset = 'da' if '2020' in vidname else 'salat'
 
 if dataset == 'da':
     ub_weight = 0.09  # DA hparams
-    eps = 0.01
+    eps = 0.1
     alpha = 0.6
     r = 0.02
 else:
     ub_weight = 0.06  # BF (Salat) hparams
-    eps = 0.01
+    eps = 0.1
     alpha = 0.6
     r = 0.04
 

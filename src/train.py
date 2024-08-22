@@ -23,7 +23,7 @@ num_eps = 1e-11
 
 class VideoSSL(pl.LightningModule):
     def __init__(self, lr=1e-4, weight_decay=1e-4, layer_sizes=[64, 128, 40], n_clusters=20, alpha_train=0.3, alpha_eval=0.3,
-                 n_ot_train=[50, 1], n_ot_eval=[50, 1], step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=True,
+                 n_ot_train=50, n_ot_eval=50, step_size=None, train_eps=0.06, eval_eps=0.01, ub_frames=False, ub_actions=True,
                  lambda_frames_train=0.05, lambda_actions_train=0.05, lambda_frames_eval=0.05, lambda_actions_eval=0.01,
                  temp=0.1, radius_gw=0.04, learn_clusters=True, n_frames=256, rho=0.1, exclude_cls=None, visualize=False):
         super().__init__()
@@ -261,11 +261,11 @@ if __name__ == '__main__':
     parser.add_argument('--lambda-actions-train', '-lat', type=float, default=0.05, help='penalty on balanced actions assumption for training')
     parser.add_argument('--lambda-frames-eval', '-lfe', type=float, default=0.05, help='penalty on balanced frames assumption for test')
     parser.add_argument('--lambda-actions-eval', '-lae', type=float, default=0.01, help='penalty on balanced actions assumption for test')
-    parser.add_argument('--eps-train', '-et', type=float, default=0.07, help='entropy regularization for OT during training')
-    parser.add_argument('--eps-eval', '-ee', type=float, default=0.04, help='entropy regularization for OT during val/test')
+    parser.add_argument('--eps-train', '-et', type=float, default=0.05, help='entropy regularization for OT during training')
+    parser.add_argument('--eps-eval', '-ee', type=float, default=0.05, help='entropy regularization for OT during val/test')
     parser.add_argument('--radius-gw', '-r', type=float, default=0.04, help='Radius parameter for GW structure loss')
-    parser.add_argument('--n-ot-train', '-nt', type=int, nargs='+', default=[25, 1], help='number of outer and inner iterations for ASOT solver (train)')
-    parser.add_argument('--n-ot-eval', '-no', type=int, nargs='+', default=[25, 1], help='number of outer and inner iterations for ASOT solver (eval)')
+    parser.add_argument('--n-ot-train', '-nt', type=int, nargs='+', default=25, help='number of outer and inner iterations for ASOT solver (train)')
+    parser.add_argument('--n-ot-eval', '-no', type=int, nargs='+', default=25, help='number of outer and inner iterations for ASOT solver (eval)')
     parser.add_argument('--step-size', '-ss', type=float, default=None,
                         help='Step size/learning rate for ASOT solver. Worth setting manually if ub-frames && ub-actions')
 
